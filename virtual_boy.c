@@ -3,17 +3,29 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#define lengthof(arr) sizeof(arr)/sizeof(arr[0])
+
 typedef uint16_t uWord;
-typedef int16_t Word;
+typedef int16_t   Word;
 
 #define MEMORY_SIZE 65535
 
 typedef uWord Memory[MEMORY_SIZE];
 
-typedef struct {
-    uWord System_space[256];
-    uWord User_space[MEMORY_SIZE-256];
-} new_memory;
+// Actual layout:
+// Trap Vector Table      : 0x0000 - 0x00FF
+// Interrupt Vector Table : 0x0100 - 0x01FF
+// OS Space               : 0x0200 - 0x2FFF
+// User Space             : 0x3000 - 0xFDFF
+// I/O Register Space     : 0xFE00 - 0xFFFF
+
+typedef enum {
+    Mem_TRAP_VT      = 0x0000,
+    Mem_INTERRUPT_VT = 0x0100,
+    Mem_OS_SPACE     = 0x0200,
+    Mem_USER_SPACE   = 0x3000,
+    Mem_IO_REG       = 0xFE00,
+} Memory_Layout;
 
 typedef enum {
     Op_BR   = 0,
@@ -34,26 +46,34 @@ typedef enum {
     Op_TRAP = 15,
 } Op_Id;
 
-typedef Word Instruction;
+typedef uWord Instruction;
 
 typedef struct {
     Word  registers[8];
     uWord PC;
-    Word  PSR;
+    uWord PSR;
 } Machine;
 
 typedef struct {
-    size_t capacity; 
-    size_t count; 
-    Instruction* instructions;
-} Program;
+    size_t       capacity; 
+    size_t       count; 
+    Instruction* bytes;
+} Byte_Data;
 
-Program* init_program() {
-    Program* program = malloc(sizeof(Program));
-    program->count = 0;
-    program->capacity = 5;
-    program->instructions = malloc(sizeof(Instruction)*program->capacity);
-    return program;
+Byte_Data* init_byte_data() {
+    Byte_Data* byte_data = malloc(sizeof(Byte_Data));
+    byte_data->count = 0;
+    byte_data->capacity = 5;
+    byte_data->bytes = malloc(sizeof(uWord)*byte_data->capacity);
+    return byte_data;
+}
+
+void push_data(Byte_Data* byte_data, uWord data) {
+    if (byte_data->count+=1 > byte_data->capacity) {
+        byte_data = realloc(byte_data, byte_data->capacity + 5); 
+    } 
+    byte_data->bytes[byte_data->count] = data;
+    byte_data->count++;
 }
 
 Word sext(int val, size_t size) {
@@ -65,13 +85,6 @@ Word sext(int val, size_t size) {
     return res;
 }
 
-void push_instruction(Program* program, Instruction inst) {
-    if (program->count+=1 > program->capacity) {
-        program = realloc(program, program->capacity + 5); 
-    } 
-    program->instructions[program->count] = inst;
-    program->count++;
-}
 
 void set_flags(Machine* machine, bool n, bool z, bool p) {
     if (n) machine->PSR |= 0b0000000000000100; 
@@ -86,12 +99,12 @@ void set_flags(Machine* machine, bool n, bool z, bool p) {
 
 void set_flags_from_result(Machine* machine, Word result) {
     if (result == 0) set_flags(machine, 0, 1, 0); 
-    else if ((result & 0b1000000000000000) == 0)  set_flags(machine, 1, 0, 0); 
+    else if ((result & 0b1000000000000000) == 0) set_flags(machine, 1, 0, 0); 
     else set_flags(machine, 0, 0, 1); 
 }
 
 void print_bits(unsigned int num) {
-    for(int bit=0; bit<(sizeof(unsigned int) * 8); bit++) {
+    for(int bit = 0; bit < (sizeof(unsigned int) * 8); bit++) {
         printf("%i ", num & 0x01);
         num = num >> 1;
     }
@@ -121,9 +134,9 @@ void add_reg(uWord rest, Machine *machine) {
 }
 
 void add_imm(uWord rest, Machine *machine) {
-    unsigned int DR_id  = (rest & 0b0000111000000000) >> 9;
-    unsigned int SR_id  = (rest & 0b0000000111000000) >> 6;
-    int IMM             = (rest & 0b0000000000011111) >> 0;
+    unsigned int DR_id = (rest & 0b0000111000000000) >> 9;
+    unsigned int SR_id = (rest & 0b0000000111000000) >> 6;
+    int IMM            = (rest & 0b0000000000011111) >> 0;
 
     Word result = machine->registers[SR_id] + sext(IMM, 5);
     set_flags_from_result(machine, result);
@@ -141,9 +154,9 @@ void and_reg(uWord rest, Machine *machine) {
 }
 
 void and_imm(uWord rest, Machine *machine) {
-    unsigned int DR_id  = (rest & 0b0000111000000000) >> 9;
-    unsigned int SR_id  = (rest & 0b0000000111000000) >> 6;
-    int IMM             = (rest & 0b0000000000011111) >> 0;
+    unsigned int DR_id = (rest & 0b0000111000000000) >> 9;
+    unsigned int SR_id = (rest & 0b0000000111000000) >> 6;
+    int IMM            = (rest & 0b0000000000011111) >> 0;
 
     Word result = machine->registers[SR_id] & sext(IMM, 5);
     set_flags_from_result(machine, result);
@@ -151,8 +164,8 @@ void and_imm(uWord rest, Machine *machine) {
 }
 
 void not(uWord rest, Machine *machine) {
-    unsigned int DR_id  = (rest & 0b0000111000000000) >> 9;
-    unsigned int SR_id  = (rest & 0b0000000111000000) >> 6;
+    unsigned int DR_id = (rest & 0b0000111000000000) >> 9;
+    unsigned int SR_id = (rest & 0b0000000111000000) >> 6;
 
     Word result = ~(machine->registers[SR_id]);
     set_flags_from_result(machine, result);
@@ -192,50 +205,42 @@ void jsrr(uWord rest, Machine* machine) {
     machine->PC = machine->registers[BaseR_id];
 }
 
-void ld(uWord rest, Machine* machine, Memory* memory) {
-    uWord DR_id = rest & 0b0000111000000000; 
-    DR_id = DR_id >> 9;
+void ld(uWord rest, Machine* machine, Memory memory) {
+    uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
+    uWord offset = (rest & 0b0000000111111111); 
 
-    uWord offset = rest & 0b0000000111111111; 
-
-    Word result = (Word)*memory[machine->PC + sext(offset, 9)]; 
+    Word result = (Word)memory[machine->PC + sext(offset, 9)]; 
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
 }
 
-void ldi(uWord rest, Machine* machine, Memory* memory) {
-    uWord DR_id = rest & 0b0000111000000000; 
-    DR_id = DR_id >> 9;
+void ldi(uWord rest, Machine* machine, Memory memory) {
+    uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
+    uWord offset = (rest & 0b0000000111111111); 
 
-    uWord offset = rest & 0b0000000111111111; 
-    uWord addr = *memory[machine->PC + sext(offset, 9)];
+    uWord addr = memory[machine->PC + sext(offset, 9)];
 
-    Word result = (Word)*memory[addr];
+    Word result = (Word)memory[addr];
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
 }
 
-void ldr(uWord rest, Machine* machine, Memory* memory) {
-    uWord DR_id = rest & 0b0000111000000000; 
-    DR_id = DR_id >> 9;
-    uWord BaseR_id = rest & 0b0000000111000000;
-    BaseR_id = BaseR_id >> 6;
+void ldr(uWord rest, Machine* machine, Memory memory) {
+    uWord DR_id    = (rest & 0b0000111000000000) >> 9; 
+    uWord BaseR_id = (rest & 0b0000000111000000) >> 6;
+    uWord offset   = (rest & 0b0000000000111111); 
 
-    uWord offset = rest & 0b0000000000111111; 
-
-    Word result = (Word)*memory[machine->registers[BaseR_id] + sext(offset, 6)];
+    Word result = (Word)memory[machine->registers[BaseR_id] + sext(offset, 6)];
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
 }
 
 void lea(uWord rest, Machine* machine) {
-    uWord DR_id = rest & 0b0000111000000000; 
-    DR_id = DR_id >> 9;
-
-    uWord offset = rest & 0b0000000111111111; 
+    uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
+    uWord offset = (rest & 0b0000000111111111) >> 9; 
 
     Word result = machine->PC + sext(offset, 9);
     machine->registers[DR_id] = result;
@@ -243,41 +248,34 @@ void lea(uWord rest, Machine* machine) {
     set_flags_from_result(machine, result);
 }
 
-void st(uWord rest, Machine* machine, Memory* memory) {
-    uWord SR_id = rest & 0b0000111000000000; 
-    SR_id = SR_id >> 9;
+void st(uWord rest, Machine* machine, Memory memory) {
+    uWord SR_id  = (rest & 0b0000111000000000) >> 9; 
+    uWord offset = (rest & 0b0000000111111111); 
 
-    uWord offset = rest & 0b0000000111111111; 
-
-    *memory[machine->PC + sext(offset, 9)] = (uWord)machine->registers[SR_id];
+    memory[machine->PC + sext(offset, 9)] = (uWord)machine->registers[SR_id];
 }
 
-void sti(uWord rest, Machine* machine, Memory* memory) {
-    uWord SR_id = rest & 0b0000111000000000; 
-    SR_id = SR_id >> 9;
+void sti(uWord rest, Machine* machine, Memory memory) {
+    uWord SR_id  = (rest & 0b0000111000000000) >> 9; 
+    uWord offset = (rest & 0b0000000111111111); 
 
-    uWord offset = rest & 0b0000000111111111; 
-    uWord addr = *memory[machine->PC + sext(offset, 9)];
+    uWord addr = memory[machine->PC + sext(offset, 9)];
 
-    *memory[addr] = machine->registers[SR_id];
+    memory[addr] = machine->registers[SR_id];
 }
 
-void str(uWord rest, Machine* machine, Memory* memory) {
-    uWord SR_id = rest & 0b0000111000000000; 
-    SR_id = SR_id >> 9;
-    uWord BaseR_id = rest & 0b0000000111000000;
-    BaseR_id = BaseR_id >> 6;
+void str(uWord rest, Machine* machine, Memory memory) {
+    uWord SR_id    = (rest & 0b0000111000000000) >> 9; 
+    uWord BaseR_id = (rest & 0b0000000111000000) >> 6;
+    uWord offset   = (rest & 0b0000000000111111); 
 
-    uWord offset = rest & 0b0000000000111111; 
-
-    *memory[machine->registers[BaseR_id] + sext(offset, 6)] = machine->registers[SR_id];
+    memory[machine->registers[BaseR_id] + sext(offset, 6)] = machine->registers[SR_id];
 }
 
 
-bool execute_instruction(Machine* machine, Instruction inst, Memory* memory) {
-    Op_Id op   = inst & 0b1111000000000000; 
-    op = op >> 12;
-    uWord rest = inst & 0b0000111111111111;
+bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
+    Op_Id op   = (inst & 0b1111000000000000) >> 12;
+    uWord rest = (inst & 0b0000111111111111);
 
     switch (op) {
         case Op_BR: {
@@ -355,28 +353,27 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory* memory) {
         } break;
 
         case Op_TRAP: break;
-
     }
     return true;
 }
 
-void execute_program(Machine* machine, Program* program, Memory* memory) {
-    for (int i = 0; i < program->count; i++) {
-        bool res = execute_instruction(machine, program->instructions[machine->PC], memory);
-        if (!res) printf("ERROR: Instruction no: %d\n", i+1);
-
+void execute_program(Machine* machine, Memory memory) {
+    for (int i = 0; i < 2; i++) {
+        uWord curr_inst = memory[machine->PC];
         if (machine->PC >= MEMORY_SIZE) {
             printf("End of Memory Reached\n");
             return;
         }
         machine->PC++;
+        bool res = execute_instruction(machine, curr_inst, memory);
+        if (!res) printf("ERROR: Instruction no: %d\n", i+1);
     }
 }
 
-void print_program(const Program* program) {
-    for (int i = 0; i < program->count; i++) {
+void print_byte_data(const Byte_Data* byte_data) {
+    for (int i = 0; i < byte_data->count; i++) {
         printf("%d: ", i);
-        print_word(program->instructions[i]);
+        print_word(byte_data->bytes[i]);
         printf("\n");
     }
 }
@@ -392,7 +389,30 @@ void print_machine_state(const Machine* machine) {
     printf("p:%d\n", (machine->PSR & 0b0000000000000100) != 0);
 }
 
-int main() {
-
+bool map_byte_data(Memory memory, const Byte_Data* byte_data, size_t loc) {
+    if (loc+byte_data->count > MEMORY_SIZE) {
+        printf("ERROR: mapped data is too large for memory\n");
+        return false;
+    }
+    for (int i = 0; i < byte_data->count; i++) {
+        memory[i+loc] = byte_data->bytes[i];
+    }
+    return true;
 }
+
+int main() {
+    Memory memory = {0};
+    Machine machine = {0};
+    Byte_Data* byte_data = init_byte_data();
+
+    push_data(byte_data, 0b0001011000100001);
+    push_data(byte_data, 0b0001001000100011);
+
+    map_byte_data(memory, byte_data, Mem_USER_SPACE);
+    machine.PC = Mem_USER_SPACE;
+    execute_program(&machine, memory);
+
+    print_machine_state(&machine);
+}
+
 
