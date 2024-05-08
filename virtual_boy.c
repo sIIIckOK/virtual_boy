@@ -19,13 +19,20 @@ typedef uWord Memory[MEMORY_SIZE];
 // User Space             : 0x3000 - 0xFDFF
 // I/O Register Space     : 0xFE00 - 0xFFFF
 
-typedef enum {
-    Mem_TRAP_VT      = 0x0000,
-    Mem_INTERRUPT_VT = 0x0100,
-    Mem_OS_SPACE     = 0x0200,
-    Mem_USER_SPACE   = 0x3000,
-    Mem_IO_REG       = 0xFE00,
-} Memory_Layout;
+enum {
+    MEM_BEGIN          = 0x0000,
+    MEM_END            = 0xFFFF,
+    MEM_TRAPVT_BEGIN   = 0x0000,
+    MEM_TRAPVT_END     = 0x00FF,
+    MEM_INTERVT_BEGIN  = 0x0100,
+    MEM_INTERVT_END    = 0x01FF,
+    MEM_OSSPC_BEGIN    = 0x0200,
+    MEM_OSSPC_END      = 0x2FFF,
+    MEM_USERSPC_BEGIN  = 0x3000,
+    MEM_USERSPC_END    = 0xFDFF,
+    MEM_IOREG_BEGIN    = 0xFE00,
+    MEM_IOREG_END      = 0xFFFF,
+};
 
 typedef enum {
     Op_BR   = 0,
@@ -389,13 +396,13 @@ void print_machine_state(const Machine* machine) {
     printf("p:%d\n", (machine->PSR & 0b0000000000000100) != 0);
 }
 
-bool map_byte_data(Memory memory, const Byte_Data* byte_data, size_t loc) {
-    if (loc+byte_data->count > MEMORY_SIZE) {
+bool map_byte_data(Memory memory, const Byte_Data* byte_data, size_t loc, size_t offset) {
+    if (loc+offset + byte_data->count> MEMORY_SIZE) {
         printf("ERROR: mapped data is too large for memory\n");
         return false;
     }
     for (int i = 0; i < byte_data->count; i++) {
-        memory[i+loc] = byte_data->bytes[i];
+        memory[i+loc+offset] = byte_data->bytes[i];
     }
     return true;
 }
@@ -408,8 +415,8 @@ int main() {
     push_data(byte_data, 0b0001011000100001);
     push_data(byte_data, 0b0001001000100011);
 
-    map_byte_data(memory, byte_data, Mem_USER_SPACE);
-    machine.PC = Mem_USER_SPACE;
+    map_byte_data(memory, byte_data, MEM_USERSPC_BEGIN, 100);
+    machine.PC = MEM_USERSPC_BEGIN + 100;
     execute_program(&machine, memory);
 
     print_machine_state(&machine);
