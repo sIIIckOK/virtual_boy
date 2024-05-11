@@ -19,20 +19,28 @@ typedef uWord Memory[MEMORY_SIZE];
 // User Space             : 0x3000 - 0xFDFF
 // I/O Register Space     : 0xFE00 - 0xFFFF
 
-enum {
+enum Mem_Landmark {
     MEM_BEGIN          = 0x0000,
     MEM_END            = 0xFFFF,
+
     MEM_TRAPVT_BEGIN   = 0x0000,
     MEM_TRAPVT_END     = 0x00FF,
+
     MEM_INTERVT_BEGIN  = 0x0100,
     MEM_INTERVT_END    = 0x01FF,
+
     MEM_OSSPC_BEGIN    = 0x0200,
     MEM_OSSPC_END      = 0x2FFF,
+
     MEM_USERSPC_BEGIN  = 0x3000,
     MEM_USERSPC_END    = 0xFDFF,
+
     MEM_IOREG_BEGIN    = 0xFE00,
     MEM_IOREG_END      = 0xFFFF,
 };
+
+// 0000 0000 0000 0000
+//  op
 
 typedef enum {
     Op_BR   = 0,
@@ -58,7 +66,7 @@ typedef uWord Instruction;
 typedef struct {
     Word  registers[8];
     uWord PC;
-    uWord PSR;
+    uWord PSR; // n:2 z:1 p:0 
 } Machine;
 
 typedef struct {
@@ -91,7 +99,6 @@ Word sext(int val, size_t size) {
 
     return res;
 }
-
 
 void set_flags(Machine* machine, bool n, bool z, bool p) {
     if (n) machine->PSR |= 0b0000000000000100; 
