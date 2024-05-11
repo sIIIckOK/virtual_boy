@@ -3,8 +3,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#define lengthof(arr) sizeof(arr)/sizeof(arr[0])
-
 typedef uint16_t uWord;
 typedef int16_t   Word;
 
