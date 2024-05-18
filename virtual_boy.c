@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef uint16_t uWord;
 typedef int16_t   Word;
@@ -9,6 +10,8 @@ typedef int16_t   Word;
 #define MEMORY_SIZE 65535
 
 typedef uWord Memory[MEMORY_SIZE];
+
+bool program_should_close = false;
 
 // Actual layout:
 // Trap Vector Table      : 0x0000 - 0x00FF
@@ -37,9 +40,6 @@ enum Mem_Landmark {
     MEM_IOREG_END      = 0xFFFF,
 };
 
-// 0000 0000 0000 0000
-//  op
-
 typedef enum {
     Op_BR   = 0,
     Op_ADD  = 1,
@@ -64,7 +64,7 @@ typedef uWord Instruction;
 typedef struct {
     Word  registers[8];
     uWord PC;
-    uWord PSR; // n:2 z:1 p:0 
+    uWord PSR;
 } Machine;
 
 typedef struct {
@@ -135,7 +135,7 @@ void print_word(uWord word) {
     printf("%s", res);
 }
 
-void add_reg(uWord rest, Machine *machine) {
+void op_add_reg(uWord rest, Machine *machine) {
     int DR_id  = (rest & 0b0000111000000000) >> 9;
     int SR1_id = (rest & 0b0000000111000000) >> 6;
     int SR2_id = (rest & 0b0000000000000111) >> 0;
@@ -145,7 +145,7 @@ void add_reg(uWord rest, Machine *machine) {
     machine->registers[DR_id] = result;
 }
 
-void add_imm(uWord rest, Machine *machine) {
+void op_add_imm(uWord rest, Machine *machine) {
     unsigned int DR_id = (rest & 0b0000111000000000) >> 9;
     unsigned int SR_id = (rest & 0b0000000111000000) >> 6;
     int IMM            = (rest & 0b0000000000011111) >> 0;
@@ -155,7 +155,7 @@ void add_imm(uWord rest, Machine *machine) {
     machine->registers[DR_id] = result;
 }
 
-void and_reg(uWord rest, Machine *machine) {
+void op_and_reg(uWord rest, Machine *machine) {
     unsigned int DR_id  = (rest & 0b0000111000000000) >> 9;
     unsigned int SR1_id = (rest & 0b0000000111000000) >> 6;
     unsigned int SR2_id = (rest & 0b0000000000000111) >> 0;
@@ -165,7 +165,7 @@ void and_reg(uWord rest, Machine *machine) {
     machine->registers[DR_id] = result;
 }
 
-void and_imm(uWord rest, Machine *machine) {
+void op_and_imm(uWord rest, Machine *machine) {
     unsigned int DR_id = (rest & 0b0000111000000000) >> 9;
     unsigned int SR_id = (rest & 0b0000000111000000) >> 6;
     int IMM            = (rest & 0b0000000000011111) >> 0;
@@ -175,7 +175,7 @@ void and_imm(uWord rest, Machine *machine) {
     machine->registers[DR_id] = result;
 }
 
-void not(uWord rest, Machine *machine) {
+void op_not(uWord rest, Machine *machine) {
     unsigned int DR_id = (rest & 0b0000111000000000) >> 9;
     unsigned int SR_id = (rest & 0b0000000111000000) >> 6;
 
@@ -184,7 +184,7 @@ void not(uWord rest, Machine *machine) {
     machine->registers[DR_id] = result;
 }
 
-void br(uWord rest, Machine* machine) {
+void op_br(uWord rest, Machine* machine) {
     bool n = (rest & 0b0000100000000000) != 0;
     bool z = (rest & 0b0000010000000000) != 0;
     bool p = (rest & 0b0000001000000000) != 0;
@@ -192,24 +192,24 @@ void br(uWord rest, Machine* machine) {
     bool cond = n && ((machine->PSR & 0b0000000000000100) == 0) 
              || z && ((machine->PSR & 0b0000000000000010) == 0)
              || p && ((machine->PSR & 0b0000000000000001) == 0);
-    if (cond) machine->PC+=sext(offset, 9);
+    if (cond) machine->PC+=sext(offset, 9) - 1;
 }
 
-void jmp(uWord rest, Machine* machine) {
+void op_jmp(uWord rest, Machine* machine) {
     uWord BaseR_id = rest & 0b0000000111000000; 
     BaseR_id = BaseR_id >> 6;
 
     machine->PC = machine->registers[BaseR_id];
 }
 
-void jsr(uWord rest, Machine* machine) {
+void op_jsr(uWord rest, Machine* machine) {
     machine->registers[7] = machine->PC+1; 
     int offset = rest & 0b0000011111111111;
 
-    machine->PC+=sext(offset, 11);
+    machine->PC+=sext(offset, 11) - 1;
 }
 
-void jsrr(uWord rest, Machine* machine) {
+void op_jsrr(uWord rest, Machine* machine) {
     machine->registers[7] = machine->PC+1; 
     uWord BaseR_id = rest & 0b0000000111000000;
     BaseR_id = BaseR_id << 6;
@@ -217,17 +217,18 @@ void jsrr(uWord rest, Machine* machine) {
     machine->PC = machine->registers[BaseR_id];
 }
 
-void ld(uWord rest, Machine* machine, Memory memory) {
+void op_ld(uWord rest, Machine* machine, Memory memory) {
     uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
-    Word result = (Word)memory[machine->PC + sext(offset, 9)]; 
+    Word result = (Word)memory[machine->PC + sext(offset, 9) - 1]; 
+    printf("pc:%d", machine->PC);
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
 }
 
-void ldi(uWord rest, Machine* machine, Memory memory) {
+void op_ldi(uWord rest, Machine* machine, Memory memory) {
     uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
@@ -239,7 +240,7 @@ void ldi(uWord rest, Machine* machine, Memory memory) {
     set_flags_from_result(machine, result);
 }
 
-void ldr(uWord rest, Machine* machine, Memory memory) {
+void op_ldr(uWord rest, Machine* machine, Memory memory) {
     uWord DR_id    = (rest & 0b0000111000000000) >> 9; 
     uWord BaseR_id = (rest & 0b0000000111000000) >> 6;
     uWord offset   = (rest & 0b0000000000111111); 
@@ -250,24 +251,24 @@ void ldr(uWord rest, Machine* machine, Memory memory) {
     set_flags_from_result(machine, result);
 }
 
-void lea(uWord rest, Machine* machine) {
+void op_lea(uWord rest, Machine* machine) {
     uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
-    uWord offset = (rest & 0b0000000111111111) >> 9; 
+    uWord offset = (rest & 0b0000000111111111);
 
-    Word result = machine->PC + sext(offset, 9);
+    Word result = machine->PC + sext(offset, 9) - 1;
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
 }
 
-void st(uWord rest, Machine* machine, Memory memory) {
+void op_st(uWord rest, Machine* machine, Memory memory) {
     uWord SR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
     memory[machine->PC + sext(offset, 9)] = (uWord)machine->registers[SR_id];
 }
 
-void sti(uWord rest, Machine* machine, Memory memory) {
+void op_sti(uWord rest, Machine* machine, Memory memory) {
     uWord SR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
@@ -276,7 +277,7 @@ void sti(uWord rest, Machine* machine, Memory memory) {
     memory[addr] = machine->registers[SR_id];
 }
 
-void str(uWord rest, Machine* machine, Memory memory) {
+void op_str(uWord rest, Machine* machine, Memory memory) {
     uWord SR_id    = (rest & 0b0000111000000000) >> 9; 
     uWord BaseR_id = (rest & 0b0000000111000000) >> 6;
     uWord offset   = (rest & 0b0000000000111111); 
@@ -284,75 +285,74 @@ void str(uWord rest, Machine* machine, Memory memory) {
     memory[machine->registers[BaseR_id] + sext(offset, 6)] = machine->registers[SR_id];
 }
 
-
 bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
     Op_Id op   = (inst & 0b1111000000000000) >> 12;
     uWord rest = (inst & 0b0000111111111111);
 
     switch (op) {
         case Op_BR: {
-            br(rest, machine);
+            op_br(rest, machine);
         } break;
 
         case Op_ADD: {
             bool flag = (rest & 0b0000000000100000) != 0;
             if (flag) {
-                add_imm(rest, machine);
+                op_add_imm(rest, machine);
             } else {
-                add_reg(rest, machine);
+                op_add_reg(rest, machine);
             }
         } break;
 
         case Op_LD: {
-            ld(rest, machine, memory);
+            op_ld(rest, machine, memory);
         } break;
 
         case Op_ST: {
-            st(rest, machine, memory);
+            op_st(rest, machine, memory);
         } break;
 
         case Op_JSR: {
             bool flag = (rest & 0b0000100000000000) != 0;
             if (flag) {
-                jsr(rest, machine);
+               op_jsr(rest, machine);
             } else {
-                jsrr(rest, machine);
+                op_jsrr(rest, machine);
             }
         } break;
 
         case Op_AND: {
             bool flag = (rest & 0b0000000000100000) != 0;
             if (flag) {
-                add_imm(rest, machine);
+                op_add_imm(rest, machine);
             } else {
-                add_reg(rest, machine);
+                op_add_reg(rest, machine);
             }
         } break;
 
         case Op_LDR: {
-            ldr(rest, machine, memory);
+            op_ldr(rest, machine, memory);
         } break; 
 
         case Op_STR: {
-            str(rest, machine, memory);
+            op_str(rest, machine, memory);
         } break;
 
         case Op_RTI: break;
 
         case Op_NOT: {
-            not(rest, machine);
+            op_not(rest, machine);
         } break;
 
         case Op_LDI: {
-            ldi(rest, machine, memory);
+            op_ldi(rest, machine, memory);
         } break;
 
         case Op_STI: {
-            sti(rest, machine, memory);
+            op_sti(rest, machine, memory);
         } break;
 
         case Op_JMP: {
-            jmp(rest, machine);
+            op_jmp(rest, machine);
         } break;
 
         case Op_RES: {
@@ -361,16 +361,20 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
         } break;
 
         case Op_LEA: {
-            lea(rest, machine);
+            op_lea(rest, machine);
         } break;
 
-        case Op_TRAP: break;
+        case Op_TRAP: {
+            program_should_close = true;
+            printf("halting program\n");
+        } break;
     }
     return true;
 }
 
 void execute_program(Machine* machine, Memory memory) {
-    for (int i = 0; i < 2; i++) {
+    int i = 0;
+    while (!program_should_close) {
         uWord curr_inst = memory[machine->PC];
         if (machine->PC >= MEMORY_SIZE) {
             printf("End of Memory Reached\n");
@@ -384,9 +388,7 @@ void execute_program(Machine* machine, Memory memory) {
 
 void print_byte_data(const Byte_Data* byte_data) {
     for (int i = 0; i < byte_data->count; i++) {
-        printf("%d: ", i);
-        print_word(byte_data->bytes[i]);
-        printf("\n");
+        printf("%d:%d\n", i, byte_data->bytes[i]);
     }
 }
 
@@ -412,18 +414,124 @@ bool map_byte_data(Memory memory, const Byte_Data* byte_data, size_t loc, size_t
     return true;
 }
 
-int main() {
-    Memory memory = {0};
-    Machine machine = {0};
+char* read_file(const char* file_name) {
+    FILE* file;
+    file = fopen(file_name, "r");
+
+    if (file == NULL) return NULL;
+
+    fseek(file, 0, SEEK_END);
+    int len = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    char* content = malloc(sizeof(char)*len);
+    for (int i = 0; i < len; i++) {
+        content[i] = fgetc(file);
+    }
+    return content;
+}
+
+Word parse_binary_word_string(char* bin_string) {
+    int number = 0;
+    int look_up[] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
+    for (int i = 0; i < 16; i++) {
+        if (bin_string[i] == '1') { // 1111000000000011
+            number += look_up[15-i];
+        }
+    } 
+    return number;
+}
+
+bool memory_map(Memory memory, const char* file_path, size_t loc, size_t offset) {
+    Byte_Data* byte_data = init_byte_data();
+    char* content = read_file(file_path);
+    int j = 0;
+    for (int i = 0; content[i] != '\0'; i++) {
+        if (content[i] == '\n' || content[i] == ' ') {
+            continue;
+        }
+        j++;
+        char buffer[17];
+        if (j == 16) {
+            for (int k = 0; k < 16; k++) {
+                buffer[k] = content[i-(15-k)];
+            }
+            buffer[16] = '\0';
+            push_data(byte_data, parse_binary_word_string(buffer));
+            j = 0;
+        }
+    }
+    if (loc+offset + byte_data->count > MEMORY_SIZE) {
+        printf("ERROR: mapped data is too large for memory\n");
+        return false;
+    }
+    for (int i = 0; i < byte_data->count; i++) {
+        memory[i+loc+offset] = byte_data->bytes[i];
+    }
+    return true;
+}
+
+Byte_Data* read_bin_from_file(char* file_name) {
+    FILE* fh;
+    fh = fopen(file_name, "rb");
+    if (!fh) { printf("ERROR: could not open specified file `%s`", file_name); return NULL; }
+
+    fseek(fh, 0, SEEK_END);
+    size_t length = ftell(fh);
+    fseek(fh, 0, SEEK_SET);
+
     Byte_Data* byte_data = init_byte_data();
 
-    push_data(byte_data, 0b0001011000100001);
-    push_data(byte_data, 0b0001001000100011);
+    uWord word = 0;
+    for (int i = 0; i < length/2; i++) {
+        int ok = fread(&word, 2, 1, fh);
+        if (!ok) { printf("ERROR: error reading binary data for file `%s`", file_name); return NULL; }
+        push_data(byte_data, word);
+    }
 
-    map_byte_data(memory, byte_data, MEM_USERSPC_BEGIN, 100);
-    machine.PC = MEM_USERSPC_BEGIN + 100;
-    execute_program(&machine, memory);
+    return byte_data;
+}
 
+bool write_bin_to_file(const Byte_Data* byte_data, char* file_name) {
+    FILE* file;
+    file = fopen(file_name, "wb");
+    if (file == NULL) return false;
+    for (int i = 0; i < byte_data->count; i++) {
+        fwrite(&byte_data->bytes[i], sizeof(uWord), 1, file);
+    }
+    fclose(file);
+    return true;
+}
+
+int main(int argc, char** argv) {
+    Machine machine = {0};
+    Memory memory = {0};
+    char* output_file = "a.dat";
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0) {
+            if (!argv[i+1]) { printf("Usage: -o <output_file_path>\n"); return -1; }
+            output_file = argv[i+1];
+        }
+        if (strcmp(argv[i], "-b") == 0) {
+            if (!argv[i+1]) { printf("Usage: -b <executable_file_path>\n"); return -1; }
+            Byte_Data* byte_data = read_bin_from_file(argv[i+1]);
+            map_byte_data(memory, byte_data, MEM_BEGIN, 0);
+            machine.PC = MEM_BEGIN;
+            execute_program(&machine, memory);
+        } 
+        if (strcmp(argv[i], "-os") == 0) {
+            if (!argv[i+1]) { printf("Usage: -os <os_file_path>\n"); return -1; }
+            read_bin_from_file(argv[i+1]);
+        } 
+        if (strcmp(argv[i], "-c") == 0) {
+            if (!argv[i+1]) { printf("Usage: -c <assembly_file_path>\n"); return -1; }
+            char* file_path = argv[i+1];
+            char* content = read_file(file_path);
+            if (!content) { printf("ERROR: could not open specified file `%s`", file_path); return -1; }
+            printf("%s", content);
+        }
+    }
+    printf("curr_pc:%d\n", machine.PC);
     print_machine_state(&machine);
 }
 
