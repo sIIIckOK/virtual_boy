@@ -18,8 +18,7 @@ There is no assembly to write programs for this virtual machine yet,
 instead we use a header file, located in `./byte_writer/byte_writer.h`.
 It contains all the functions in order to create a binary executables for the VM.
 
-Here is one examples code: 
-more can be found in `examples/`
+Here is one examples code, more can be found in `examples/`:
 ```
 #include "../byte_writer.h"
 
