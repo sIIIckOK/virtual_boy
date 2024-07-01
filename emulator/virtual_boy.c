@@ -110,9 +110,9 @@ void set_flags(Machine* machine, bool n, bool z, bool p) {
 }
 
 void set_flags_from_result(Machine* machine, Word result) {
-    if (result == 0) set_flags(machine, 0, 1, 0); 
-    else if ((result & 0b1000000000000000) == 0) set_flags(machine, 1, 0, 0); 
-    else set_flags(machine, 0, 0, 1); 
+    if (result == 0) set_flags(machine, 0, 1, 0);
+    else if ((result & 0b1000000000000000) == 0) set_flags(machine, 0, 0, 1);
+    else set_flags(machine, 1, 0, 0); 
 }
 
 void print_bits(unsigned int num) {
@@ -189,10 +189,10 @@ void op_br(uWord rest, Machine* machine) {
     bool z = (rest & 0b0000010000000000) != 0;
     bool p = (rest & 0b0000001000000000) != 0;
     int offset = rest & 0b0000000111111111;  
-    bool cond = n && ((machine->PSR & 0b0000000000000100) == 0) 
-             || z && ((machine->PSR & 0b0000000000000010) == 0)
-             || p && ((machine->PSR & 0b0000000000000001) == 0);
-    if (cond) machine->PC+=sext(offset, 9) - 1;
+    bool cond = n && ((machine->PSR & 0b0000000000000100) != 0) 
+             || z && ((machine->PSR & 0b0000000000000010) != 0)
+             || p && ((machine->PSR & 0b0000000000000001) != 0);
+    if (cond) machine->PC+=sext(offset, 9);
 }
 
 void op_jmp(uWord rest, Machine* machine) {
@@ -433,11 +433,11 @@ char* read_file(const char* file_name) {
 Word parse_binary_word_string(char* bin_string) {
     int number = 0;
     int look_up[] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
-    for (int i = 0; i < 16; i++) {
-        if (bin_string[i] == '1') { // 1111000000000011
+
+    for (int i = 0; i < 16; i++) 
+        if (bin_string[i] == '1')
             number += look_up[15-i];
-        }
-    } 
+
     return number;
 }
 
