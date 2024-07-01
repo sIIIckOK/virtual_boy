@@ -7,7 +7,7 @@
 - [About Instruction Set](https://www.cs.colostate.edu/~cs270/.Fall18/resources/PattPatelAppA.pdf)
 
 ## Important Notes
-- Interrupts and Traps are supported except for `1111000000000000` which is an HALT instruction
+- Interrupts and Traps are supported except for `1111000000000000` which is the HALT instruction
 
 # Quick Start
 
