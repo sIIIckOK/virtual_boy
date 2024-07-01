@@ -5,7 +5,7 @@
 # Quick Start
 
 ## The VM
-The virtual boy program is: emulator/bin/vboy.
+The virtual boy program is: `emulator/bin/vboy`.
 And, the examples programs are in `examples/`, with the .dat extension.
 
 ```
