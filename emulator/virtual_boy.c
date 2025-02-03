@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -9,11 +10,11 @@ typedef int16_t   Word;
 
 #define MEMORY_SIZE 65535
 
-typedef uWord Memory[MEMORY_SIZE];
+typedef char Memory[MEMORY_SIZE];
 
-bool program_should_close = false;
-
-// Actual layout:
+static bool program_should_close = false;
+ 
+// memory layout:
 // Trap Vector Table      : 0x0000 - 0x00FF
 // Interrupt Vector Table : 0x0100 - 0x01FF
 // OS Space               : 0x0200 - 0x2FFF
@@ -64,13 +65,14 @@ typedef uWord Instruction;
 typedef struct {
     Word  registers[8];
     uWord PC;
+    uWord IR;
     uWord PSR;
 } Machine;
 
 typedef struct {
     size_t       capacity; 
     size_t       count; 
-    Instruction* bytes;
+    char* bytes;
 } Byte_Data;
 
 Byte_Data* init_byte_data() {
@@ -286,6 +288,7 @@ void op_str(uWord rest, Machine* machine, Memory memory) {
 
 bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
     Op_Id op   = (inst & 0b1111000000000000) >> 12;
+    //printf("op: %d", op);
     uWord rest = (inst & 0b0000111111111111);
 
     switch (op) {
@@ -355,7 +358,7 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
         } break;
 
         case Op_RES: {
-            printf("ERROR: Illegal Opcode\n");
+            printf("[ERROR] Illegal Opcode\n");
             return false;
         } break;
 
@@ -372,16 +375,15 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
 }
 
 void execute_program(Machine* machine, Memory memory) {
-    int i = 0;
     while (!program_should_close) {
-        uWord curr_inst = memory[machine->PC];
-        if (machine->PC >= MEMORY_SIZE) {
+        if (machine->PC + 1 >= MEMORY_SIZE) {
             printf("End of Memory Reached\n");
             return;
         }
-        machine->PC++;
-        bool res = execute_instruction(machine, curr_inst, memory);
-        if (!res) printf("ERROR: Instruction no: %d\n", i+1);
+        uWord inst = memory[machine->PC] | memory[machine->PC + 1] << 8;
+        machine->PC += 2;
+        bool res = execute_instruction(machine, inst, memory);
+        if (!res) printf("ERROR: Instruction no %u\n", machine->PC);
     }
 }
 
@@ -402,13 +404,14 @@ void print_machine_state(const Machine* machine) {
     printf("p:%d\n", (machine->PSR & 0b0000000000000100) != 0);
 }
 
-bool map_byte_data(Memory memory, const Byte_Data* byte_data, size_t loc, size_t offset) {
-    if (loc+offset + byte_data->count> MEMORY_SIZE) {
-        printf("ERROR: mapped data is too large for memory\n");
+bool map_byte_data(Memory memory, const Byte_Data* byte_data, size_t loc, 
+                   size_t offset) {
+    if (loc + offset + byte_data->count > MEMORY_SIZE) {
+        printf("[ERROR] mapped data is too large for memory\n");
         return false;
     }
     for (int i = 0; i < byte_data->count; i++) {
-        memory[i+loc+offset] = byte_data->bytes[i];
+        memory[i + loc + offset] = byte_data->bytes[i];
     }
     return true;
 }
@@ -430,50 +433,13 @@ char* read_file(const char* file_name) {
     return content;
 }
 
-Word parse_binary_word_string(char* bin_string) {
-    int number = 0;
-    int look_up[] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
-
-    for (int i = 0; i < 16; i++) 
-        if (bin_string[i] == '1')
-            number += look_up[15-i];
-
-    return number;
-}
-
-bool memory_map(Memory memory, const char* file_path, size_t loc, size_t offset) {
-    Byte_Data* byte_data = init_byte_data();
-    char* content = read_file(file_path);
-    int j = 0;
-    for (int i = 0; content[i] != '\0'; i++) {
-        if (content[i] == '\n' || content[i] == ' ') {
-            continue;
-        }
-        j++;
-        char buffer[17];
-        if (j == 16) {
-            for (int k = 0; k < 16; k++) {
-                buffer[k] = content[i-(15-k)];
-            }
-            buffer[16] = '\0';
-            push_data(byte_data, parse_binary_word_string(buffer));
-            j = 0;
-        }
-    }
-    if (loc+offset + byte_data->count > MEMORY_SIZE) {
-        printf("ERROR: mapped data is too large for memory\n");
-        return false;
-    }
-    for (int i = 0; i < byte_data->count; i++) {
-        memory[i+loc+offset] = byte_data->bytes[i];
-    }
-    return true;
-}
-
 Byte_Data* read_bin_from_file(char* file_name) {
     FILE* fh;
     fh = fopen(file_name, "rb");
-    if (!fh) { printf("ERROR: could not open specified file `%s`", file_name); return NULL; }
+    if (!fh) {
+        printf("[ERROR] could not open specified file `%s`", file_name);
+        return NULL;
+    }
 
     fseek(fh, 0, SEEK_END);
     size_t length = ftell(fh);
@@ -482,9 +448,12 @@ Byte_Data* read_bin_from_file(char* file_name) {
     Byte_Data* byte_data = init_byte_data();
 
     uWord word = 0;
-    for (int i = 0; i < length/2; i++) {
-        int ok = fread(&word, 2, 1, fh);
-        if (!ok) { printf("ERROR: error reading binary data for file `%s`", file_name); return NULL; }
+    for (int i = 0; i < length; i++) {
+        int ok = fread(&word, 1, 1, fh);
+        if (!ok) {
+            printf("[ERROR] error reading binary data for file `%s`", file_name);
+            return NULL;
+        }
         push_data(byte_data, word);
     }
 
@@ -505,30 +474,47 @@ bool write_bin_to_file(const Byte_Data* byte_data, char* file_name) {
 int main(int argc, char** argv) {
     Machine machine = {0};
     Memory memory = {0};
-    char* output_file = "a.dat";
+    char* os_file_name;
+    char* program_file_name;
+    bool loados = false;
+    bool loadprogram = false;
     for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "-o") == 0) {
-            if (!argv[i+1]) { printf("Usage: -o <output_file_path>\n"); return -1; }
-            output_file = argv[i+1];
-        }
         if (strcmp(argv[i], "-b") == 0) {
-            if (!argv[i+1]) { printf("Usage: -b <executable_file_path>\n"); return -1; }
-            Byte_Data* byte_data = read_bin_from_file(argv[i+1]);
-            map_byte_data(memory, byte_data, MEM_BEGIN, 0);
-            machine.PC = MEM_BEGIN;
-            execute_program(&machine, memory);
+            if (!argv[i+1]) {
+                printf("Usage: -b <executable_file_path>\n");
+                return -1;
+            }
+            loadprogram = true;
+            program_file_name = argv[i+1];
         } 
         if (strcmp(argv[i], "-os") == 0) {
-            if (!argv[i+1]) { printf("Usage: -os <os_file_path>\n"); return -1; }
-            read_bin_from_file(argv[i+1]);
+            if (!argv[i+1]) {
+                printf("Usage: -os <os_file_path>\n");
+                return -1;
+            }
+            loados = true;
+            os_file_name = argv[i+1];
         } 
-        if (strcmp(argv[i], "-c") == 0) {
-            if (!argv[i+1]) { printf("Usage: -c <assembly_file_path>\n"); return -1; }
-            char* file_path = argv[i+1];
-            char* content = read_file(file_path);
-            if (!content) { printf("ERROR: could not open specified file `%s`", file_path); return -1; }
-            printf("%s", content);
+    }
+    if (loados) {
+        Byte_Data* os = read_bin_from_file(os_file_name);
+        if (!os) {
+            printf("[ERROR] could not load os file `%s`: %s\n", os_file_name, strerror(errno));
         }
+    }
+    if (!loadprogram){
+        printf("Please provide a program file name to load\n");
+        printf("atleast one file is required to run the emulator\n");
+        printf("Usage: -b <executable_file_path>\n");
+        return -1;
+    } else {
+        Byte_Data* byte_data = read_bin_from_file(program_file_name);
+        if (!byte_data) {
+            printf("[ERROR] could not load program file `%s`: %s\n", program_file_name, strerror(errno));
+        }
+        map_byte_data(memory, byte_data, MEM_BEGIN, 0);
+        machine.PC = MEM_BEGIN;
+        execute_program(&machine, memory);
     }
     print_machine_state(&machine);
 }
