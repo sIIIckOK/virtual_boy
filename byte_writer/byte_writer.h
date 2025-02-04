@@ -17,13 +17,13 @@ typedef struct {
 Byte_Data* init_byte_data() {
     Byte_Data* byte_data = (Byte_Data*)malloc(sizeof(Byte_Data));
     byte_data->count = 0;
-    byte_data->capacity = 5;
+    byte_data->capacity = 10;
     byte_data->bytes = (Instruction*)malloc(sizeof(uWord)*byte_data->capacity);
     return byte_data;
 }
 
 void push_data(Byte_Data* byte_data, uWord data) {
-    if (byte_data->count+=1 > byte_data->capacity) {
+    if (byte_data->count += 1 > byte_data->capacity) {
         byte_data = (Byte_Data*)realloc(byte_data, byte_data->capacity + 5); 
     } 
     byte_data->bytes[byte_data->count] = data;

@@ -10,7 +10,9 @@ typedef int16_t   Word;
 
 #define MEMORY_SIZE 65535
 
-typedef char Memory[MEMORY_SIZE];
+typedef uint8_t Memory[MEMORY_SIZE]; // [ALERT] cant use signed char instead of uint8 
+                                     // as signed char get sign extended by C which messes with the data
+                                     // could also use `unsigned char`
 
 static bool program_should_close = false;
  
@@ -41,6 +43,8 @@ enum Mem_Landmark {
     MEM_IOREG_END      = 0xFFFF,
 };
 
+typedef uWord Instruction;
+
 typedef enum {
     Op_BR   = 0,
     Op_ADD  = 1,
@@ -60,7 +64,24 @@ typedef enum {
     Op_TRAP = 15,
 } Op_Id;
 
-typedef uWord Instruction;
+static char* op_name[] = {
+    [Op_BR] = "Op_BR",
+    [Op_ADD] = "Op_ADD",
+    [Op_LD] = "Op_LD",
+    [Op_ST] = "Op_ST",
+    [Op_JSR] = "Op_JSR",
+    [Op_AND] = "Op_AND",
+    [Op_LDR] = "Op_LDR",
+    [Op_STR] = "Op_STR",
+    [Op_RTI] = "Op_RTI",
+    [Op_NOT] = "Op_NOT",
+    [Op_LDI] = "Op_LDI",
+    [Op_STI] = "Op_STI",
+    [Op_JMP] = "Op_JMP",
+    [Op_RES] = "Op_RES",
+    [Op_LEA] = "Op_LEA",
+    [Op_TRAP] = "Op_TRAP",
+};
 
 typedef struct {
     Word  registers[8];
@@ -70,9 +91,9 @@ typedef struct {
 } Machine;
 
 typedef struct {
-    size_t       capacity; 
-    size_t       count; 
-    char* bytes;
+    uint8_t* bytes;
+    size_t capacity; 
+    size_t count; 
 } Byte_Data;
 
 Byte_Data* init_byte_data() {
@@ -194,7 +215,7 @@ void op_br(uWord rest, Machine* machine) {
     bool cond = n && ((machine->PSR & 0b0000000000000100) != 0) 
              || z && ((machine->PSR & 0b0000000000000010) != 0)
              || p && ((machine->PSR & 0b0000000000000001) != 0);
-    if (cond) machine->PC+=sext(offset, 9);
+    if (cond) machine->PC += (int16_t)sext(offset * 2, 9);
 }
 
 void op_jmp(uWord rest, Machine* machine) {
@@ -288,7 +309,6 @@ void op_str(uWord rest, Machine* machine, Memory memory) {
 
 bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
     Op_Id op   = (inst & 0b1111000000000000) >> 12;
-    //printf("op: %d", op);
     uWord rest = (inst & 0b0000111111111111);
 
     switch (op) {
@@ -380,7 +400,9 @@ void execute_program(Machine* machine, Memory memory) {
             printf("End of Memory Reached\n");
             return;
         }
-        uWord inst = memory[machine->PC] | memory[machine->PC + 1] << 8;
+        uWord inst1 = memory[machine->PC];
+        uWord inst2 = memory[machine->PC + 1];
+        uWord inst = (inst1 | inst2 << 8);
         machine->PC += 2;
         bool res = execute_instruction(machine, inst, memory);
         if (!res) printf("ERROR: Instruction no %u\n", machine->PC);
@@ -447,14 +469,14 @@ Byte_Data* read_bin_from_file(char* file_name) {
 
     Byte_Data* byte_data = init_byte_data();
 
-    uWord word = 0;
+    char byte = 0;
     for (int i = 0; i < length; i++) {
-        int ok = fread(&word, 1, 1, fh);
+        int ok = fread(&byte, 1, 1, fh);
         if (!ok) {
             printf("[ERROR] error reading binary data for file `%s`", file_name);
             return NULL;
         }
-        push_data(byte_data, word);
+        push_data(byte_data, byte);
     }
 
     return byte_data;
