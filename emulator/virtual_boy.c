@@ -244,7 +244,7 @@ void op_ld(uWord rest, Machine* machine, Memory memory) {
     uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
-    Word result = (Word)memory[machine->PC + sext(offset, 9) - 1]; 
+    int8_t result = (int8_t)memory[machine->PC + sext(offset, 9)]; 
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
@@ -254,7 +254,7 @@ void op_ldi(uWord rest, Machine* machine, Memory memory) {
     uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
-    uWord addr = memory[machine->PC + sext(offset, 9) - 1];
+    uWord addr = memory[machine->PC + sext(offset, 9)];
 
     Word result = (Word)memory[addr];
     machine->registers[DR_id] = result;
@@ -267,7 +267,7 @@ void op_ldr(uWord rest, Machine* machine, Memory memory) {
     uWord BaseR_id = (rest & 0b0000000111000000) >> 6;
     uWord offset   = (rest & 0b0000000000111111); 
 
-    Word result = (Word)memory[machine->registers[BaseR_id] + sext(offset, 6) - 1];
+    Word result = (Word)memory[machine->registers[BaseR_id] + sext(offset, 6)];
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
@@ -287,14 +287,14 @@ void op_st(uWord rest, Machine* machine, Memory memory) {
     uWord SR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
-    memory[machine->PC + sext(offset, 9) - 1] = (uWord)machine->registers[SR_id];
+    memory[machine->PC + sext(offset, 9)] = machine->registers[SR_id];
 }
 
 void op_sti(uWord rest, Machine* machine, Memory memory) {
     uWord SR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
-    uWord addr = memory[machine->PC + sext(offset, 9) - 1];
+    uWord addr = memory[machine->PC + sext(offset, 9)];
 
     memory[addr] = machine->registers[SR_id];
 }
@@ -304,7 +304,7 @@ void op_str(uWord rest, Machine* machine, Memory memory) {
     uWord BaseR_id = (rest & 0b0000000111000000) >> 6;
     uWord offset   = (rest & 0b0000000000111111); 
 
-    memory[machine->registers[BaseR_id] + sext(offset, 6) - 1] = machine->registers[SR_id];
+    memory[machine->registers[BaseR_id] + sext(offset, 6)] = machine->registers[SR_id];
 }
 
 bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
@@ -395,9 +395,7 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
 }
 
 void execute_program(Machine* machine, Memory memory) {
-    int i = 0;
-    while (!program_should_close && i < 5) {
-        i++;
+    while (!program_should_close) {
         if (machine->PC + 1 >= MEMORY_SIZE) {
             printf("End of Memory Reached\n");
             return;
