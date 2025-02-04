@@ -345,9 +345,9 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
         case Op_AND: {
             bool flag = (rest & 0b0000000000100000) != 0;
             if (flag) {
-                op_add_imm(rest, machine);
+                op_and_imm(rest, machine);
             } else {
-                op_add_reg(rest, machine);
+                op_and_reg(rest, machine);
             }
         } break;
 
@@ -395,14 +395,16 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
 }
 
 void execute_program(Machine* machine, Memory memory) {
-    while (!program_should_close) {
+    int i = 0;
+    while (!program_should_close && i < 5) {
+        i++;
         if (machine->PC + 1 >= MEMORY_SIZE) {
             printf("End of Memory Reached\n");
             return;
         }
         uWord inst1 = memory[machine->PC];
         uWord inst2 = memory[machine->PC + 1];
-        uWord inst = (inst1 | inst2 << 8);
+        uWord inst = (inst2 << 8 | inst1);
         machine->PC += 2;
         bool res = execute_instruction(machine, inst, memory);
         if (!res) printf("ERROR: Instruction no %u\n", machine->PC);
