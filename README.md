@@ -28,17 +28,17 @@ add %r0 $r0 #1
 ```
 
 ### Registers
-registers are prefixed with `%`
+registers are prefixed with `%`\
 there is r0-r7 general purpose registers
 
 ### Int Literals (only decimal supported for now)
-int literals (only decimals supported for now) are prefixed with `#`
+int literals (only decimals supported for now) are prefixed with `#`\
 negetive literals would be `#-1` for example
 
 ### Labels
-labels are prefixed with `$`
-label definitions would look like this `$label:` where the `:` is required
-__note__ that the current iteration of the assembler cannot warn you about label definitions without the trailing `:` so be careful
+labels are prefixed with `$`\
+label definitions would look like this `$label:` where the `:` is required.\
+__Note__ that the current iteration of the assembler cannot warn you about label definitions without the trailing `:` so be careful
 when you want to refer to a label you use `$label` without the `:` in an instruction if would look like
 ```asm
 $label:
@@ -46,14 +46,14 @@ br nzp $label
 ```
 
 ### Compared to Conventional Assembly Syntax
-this assembler is designed the way it is for the simplicity of implementation, thats why the syntax feels weird.
-for example compared to conventional assemblers that are new line sensitive, where each instruction needs to be in a new line
-this assembler treats new lines and spaces the same, so in theory you can write multiple instructions in the same line.
+this assembler is designed the way it is for the simplicity of implementation, thats why the syntax feels weird.\
+For example compared to conventional assemblers that are new line sensitive, where each instruction needs to be in a new line,\
+this assembler treats new lines and spaces the same, so in theory you can write multiple instructions in the same line.\
 
 ## The Byte Writer (__About to be deprecated__)
-There is no assembly to write programs for this virtual machine yet,
-instead we use a header file, located in `byte_writer/byte_writer.h`.
-It contains all the functions in order to create a binary executables for the VM.
+There is no assembly to write programs for this virtual machine yet,\
+instead we use a header file, located in `byte_writer/byte_writer.h`.\
+It contains all the functions in order to create a binary executables for the VM.  
 
 Here is one examples code, more can be found in `examples/`:
 ```c
