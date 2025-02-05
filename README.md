@@ -21,10 +21,10 @@ And, the examples programs are in `examples/`, with the .bin extension.
 * __NOTE__: do not forget the `-b` flag
 
 ## The Assembler
-There is an assembler that is a part of this project that is currently in development
+There is an assembler that is a part of this project that is currently in development\
 here is the basic syntax:
 ```asm
-add %r0 $r0 #1
+add %r0 %r0 #1
 ```
 
 ### Registers
@@ -48,7 +48,7 @@ br nzp $label
 ### Compared to Conventional Assembly Syntax
 this assembler is designed the way it is for the simplicity of implementation, thats why the syntax feels weird.\
 For example compared to conventional assemblers that are new line sensitive, where each instruction needs to be in a new line,\
-this assembler treats new lines and spaces the same, so in theory you can write multiple instructions in the same line.\
+this assembler treats new lines and spaces the same, so in theory you can write multiple instructions in the same line.
 
 ## The Byte Writer (__About to be deprecated__)
 There is no assembly to write programs for this virtual machine yet,\
