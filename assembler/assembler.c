@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <time.h>
+
+// #define LABEL_HASH_IMPL
+// #include "probe.h"
 
 typedef struct {
     char* data;
@@ -30,6 +34,114 @@ bool sv_contains(const String_View sv, const char ch) {
 
 #define SV_FMT   "%.*s"
 #define SV_ARG(SV) ((int)(SV).len), (SV).data
+
+// LABEL_HASHMAPS
+//
+//
+//
+//
+
+size_t hash_string_view(String_View sv) {
+    size_t hash = 0;
+    for (int i = 0; i < sv.len; i++) {
+        hash += (sv.data[i] * 10) / 3;
+    }
+    return hash;
+}
+
+typedef struct {
+    size_t bytes_count;
+    String_View content;
+} Label;
+
+Label new_label(String_View content, size_t bytes_count) {
+    return (Label){
+        .content = content, 
+        .bytes_count = bytes_count
+    };
+}
+
+typedef struct SLabel_Element {
+    bool is_occupied;
+    size_t bytes_count;
+    String_View content;
+    struct SLabel_Element *next;
+} Label_Element;
+
+typedef struct {
+    Label_Element* labels;
+    size_t  capacity;
+    size_t  count;
+} Label_Hashmap ;
+
+Label_Hashmap label_hminit(size_t init_cap) {
+    Label_Element* labels = (Label_Element*)malloc(sizeof(Label_Element) * init_cap);
+    return (Label_Hashmap) {
+        .capacity = init_cap,
+        .labels = labels,
+    };
+}
+
+void insert_label(Label_Hashmap* lhm, String_View key, Label value) {
+    if (lhm->count + 1 >= lhm->capacity) {
+        lhm->capacity *= 2;
+        size_t* labels = (size_t*)realloc(lhm->labels, sizeof(size_t) * lhm->capacity);
+    }
+    size_t hash = hash_string_view(key);
+    hash %= lhm->capacity;
+    Label_Element element = {
+        .is_occupied = true,
+        .next = NULL,
+        .bytes_count = value.bytes_count,
+        .content = value.content,
+    };
+    Label_Element* old_elem = &lhm->labels[hash];
+    if (old_elem->is_occupied) {
+        for (;old_elem->next;) {
+            old_elem = old_elem->next;
+        }
+        Label_Element* new_elem = (Label_Element*)malloc(sizeof(Label_Element));
+        old_elem->next = new_elem;
+        *new_elem = element;
+    } else {
+        lhm->labels[hash] = element;
+    }
+}
+
+Label get_label(Label_Hashmap* lhm, String_View key) {
+    size_t hash = hash_string_view(key);
+    hash %= lhm->capacity;
+    Label_Element elem = lhm->labels[hash];
+    if (!elem.is_occupied) {
+        return (Label) {
+            .content.data = NULL,
+        };
+    } else {
+        if (sv_cmp(elem.content, key)) {
+            return (Label) {
+                .content = elem.content,
+                .bytes_count = elem.bytes_count,
+            }; 
+        }
+        for (;elem.next;) {
+            if (sv_cmp(elem.content, key)) {
+                return (Label) {
+                    .content = elem.content,
+                    .bytes_count = elem.bytes_count,
+                }; 
+            } else {
+                elem = *elem.next;
+            }
+            return (Label) {
+                .content.data = NULL,
+            };
+        }
+    }
+    return (Label) {
+        .content.data = NULL,
+    };
+}
+
 
 char* read_file(const char* file_name, size_t* size) {
     FILE* file;
@@ -137,6 +249,8 @@ typedef enum {
     TOKEN_JSR,
     TOKEN_RET,
     TOKEN_BR,
+    TOKEN_LABEL_DEF,
+    TOKEN_LABEL_CALL,
     TOKEN_INT_LIT,
 } Token_Type;
 
@@ -156,7 +270,10 @@ static char* token_name[] = {
     [TOKEN_JMP] = "TOKEN_JMP",
     [TOKEN_JSR] = "TOKEN_JSR",
     [TOKEN_RET] = "TOKEN_RET",
+    [TOKEN_TRAP] = "TOKEN_TRAP",
     [TOKEN_RTI] = "TOKEN_RTI",
+    [TOKEN_LABEL_DEF] = "TOKEN_LABEL_DEF",
+    [TOKEN_LABEL_CALL] = "TOKEN_LABEL_CALL",
     [TOKEN_INT_LIT] = "TOKEN_INT_LIT",
     [TOKEN_ILLEGAL] = "TOKEN_ILLEGAL",
     [TOKEN_END] = "TOKEN_END",
@@ -165,11 +282,16 @@ static char* token_name[] = {
 typedef struct {
     Token_Type type;
     int operand;
+    String_View content;
     Location loc;
 } Token;
 
-Token parse_next_token(Lexer* l) {
+// current pc = bytes_count + 2
+size_t bytes_count = 0;
+
+Token parse_next_token(Lexer* l, Label_Hashmap* lhm) {
     Token t = {0};
+    size_t org_value = 0;
     t.type = TOKEN_END;
     for (int i = 0; l->cursor < l->size; i++) {
         String_Token st = lex_chop_token(l);
@@ -187,6 +309,23 @@ Token parse_next_token(Lexer* l) {
             t.type = TOKEN_REG;
             t.operand = st.content.data[1] - '0';
             return t;
+        } else if (st.content.data[0] == '$') {
+            if (st.content.data[st.content.len - 1] == ':') {
+                continue;
+            } else {
+                st.content.data++;
+                st.content.len--;
+                Label lbl = get_label(lhm, st.content);
+                if (lbl.content.data == NULL) {
+                    print_loc(t.loc);
+                    printf("[ERROR] undefined label `"SV_FMT"`\n", SV_ARG(st.content));
+                    t.type = TOKEN_ILLEGAL;
+                    return t;
+                }
+                t.type = TOKEN_LABEL_CALL;
+                t.operand = lbl.bytes_count;
+                return t;
+            }
         } else if (st.content.data[0] == '#') {
             st.content.data++;
             st.content.len--;
@@ -215,48 +354,63 @@ Token parse_next_token(Lexer* l) {
             else           t.operand = number;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("add"))) {
+            bytes_count += 2;
             t.type = TOKEN_ADD;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("not"))) {
+            bytes_count += 2;
             t.type = TOKEN_NOT;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("and"))) {
+            bytes_count += 2;
             t.type = TOKEN_AND;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("jmp"))) {
+            bytes_count += 2;
             t.type = TOKEN_JMP;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("ld"))) {
+            bytes_count += 2;
             t.type = TOKEN_LD;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("ldi"))) {
+            bytes_count += 2;
             t.type = TOKEN_LDI;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("ldr"))) {
+            bytes_count += 2;
             t.type = TOKEN_LDR;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("st"))) {
+            bytes_count += 2;
             t.type = TOKEN_ST;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("sti"))) {
+            bytes_count += 2;
             t.type = TOKEN_STI;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("str"))) {
+            bytes_count += 2;
             t.type = TOKEN_STR;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("rti"))) {
+            bytes_count += 2;
             t.type = TOKEN_RTI;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("trap"))) {
+            bytes_count += 2;
             t.type = TOKEN_TRAP;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("jsr"))) {
+            bytes_count += 2;
             t.type = TOKEN_JSR;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("ret"))) {
+            bytes_count += 2;
             t.type = TOKEN_RET;
             return t;
         } else if (sv_cmp(st.content, SV_STATIC("br"))) {
+            bytes_count += 2;
             t.type = TOKEN_BR;
             if (l->cursor + 1 >= l->size) {
                 printf("[ERROR] invalid int literal`"SV_FMT"`\n", SV_ARG(st.content));
@@ -267,9 +421,11 @@ Token parse_next_token(Lexer* l) {
             uint16_t operand = 0;
             if (sv_contains(args_tok.content, 'n')) {
                 operand |= 0b100;
-            } else if (sv_contains(args_tok.content, 'z')) { 
+            } 
+            if (sv_contains(args_tok.content, 'z')) { 
                 operand |= 0b010;
-            } else if (sv_contains(args_tok.content, 'p')) {
+            }
+            if (sv_contains(args_tok.content, 'p')) {
                 operand |= 0b001;
             }
             t.operand = operand;
@@ -280,6 +436,59 @@ Token parse_next_token(Lexer* l) {
         }
     }
     return t;
+}
+
+void first_pass(Lexer* l, Label_Hashmap* lhm) {
+    size_t org_value = 0;
+    for (;l->cursor < l->size;) {
+        String_Token st = lex_chop_token(l);
+        if (st.content.len == 0) continue;
+        if (st.content.data[0] == '$' || st.content.data[st.content.len - 1] == ':') {
+            if ((int)st.content.len - 3 <= 0) {
+                print_loc(st.loc);
+                printf("[ERROR] invalid label `"SV_FMT"`\n", SV_ARG(st.content));
+            }
+            st.content.data++;
+            st.content.len -= 2;
+            Label lbl = new_label(st.content, bytes_count + org_value);
+            Label check = get_label(lhm, st.content);
+            if (check.content.data != NULL) {
+                print_loc(st.loc);
+                printf("[ERROR] label redefined `"SV_FMT"`\n", SV_ARG(st.content));
+            }
+            insert_label(lhm, st.content, lbl);
+        } else if (sv_cmp(st.content, SV_STATIC("add"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("not"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("and"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("jmp"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("ld"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("ldi"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("ldr"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("st"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("sti"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("str"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("rti"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("trap"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("jsr"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("ret"))) {
+            bytes_count += 2;
+        } else if (sv_cmp(st.content, SV_STATIC("br"))) {
+            bytes_count += 2;
+        }
+    }
 }
 
 uint16_t compile_add(Token inst_token, Token dst, Token src1, Token src2) {
@@ -322,24 +531,22 @@ uint16_t compile_and(Token inst_token, Token dst, Token src1, Token src2) {
         exit(1);
     }
     uint16_t inst = 0;
-    inst |= 0b0101 << 12;
+    inst |= 0b0101                 << 12;
     inst |= (dst.operand & 0b111)  << 9;
     inst |= (src1.operand & 0b111) << 6;
     if (src2.type == TOKEN_REG) {
         inst |= (src2.operand & 0b111);
     } else if (src2.type == TOKEN_INT_LIT) {
-        int16_t imm_val = src2.operand & 0b11111;
-        printf("immv %i\n", imm_val);
+        int16_t imm_val = src2.operand;
         if (imm_val < -8 || imm_val > 7) {
             print_loc(src2.loc);
-            printf("[ERROR] immediate value for the `add` op should be in the range (-8:7)\n");
+            printf("[ERROR] immediate value for the `and` op should be in the range (-8:7)\n");
             exit(1);
         }
         inst |= 1 << 5;
-        inst |= imm_val;
-        printf("0x%x\n", inst);
+        inst |= (imm_val & 0b11111);
     } else {
-        assert(false && "unreachable");
+        assert(false && "compile_add unreachable");
     }
     return inst;
 }
@@ -360,7 +567,7 @@ uint16_t compile_not(Token inst_token, Token dst_reg, Token src_reg) {
 }
 
 uint16_t compile_br(Token inst_token, Token offset_9) {
-    if (offset_9.type != TOKEN_INT_LIT) {
+    if (!(offset_9.type == TOKEN_INT_LIT || offset_9.type == TOKEN_LABEL_CALL)) {
         print_loc(inst_token.loc);
         printf("[ERROR] invalid operands to for `br` instruction\n");
         printf("expected `br <n|z|p> <pc_offset>`\n");
@@ -368,13 +575,22 @@ uint16_t compile_br(Token inst_token, Token offset_9) {
         exit(1);
     }
     uint16_t inst = 0;
-    inst |= (inst_token.operand & 0b111)   << 9;
-    inst |= (offset_9.operand & 0b111111111) << 0;
+    inst |= (inst_token.operand & 0b111) << 9;
+
+    if (offset_9.type == TOKEN_INT_LIT) {
+        inst |= (offset_9.operand & 0b111111111) << 0;
+    } else if (offset_9.type == TOKEN_LABEL_CALL) {
+        int rel_addr = (offset_9.operand - bytes_count - 1);
+        inst |= (rel_addr & 0b111111111) << 0;
+    } else {
+        assert(false && "compile_br unreachable");
+    }
+    
     return inst;
 }
 
 uint16_t compile_jmp(Token inst_token, Token base_reg) {
-    if (base_reg.type != TOKEN_REG) {
+    if (base_reg.type != TOKEN_REG || base_reg.type != TOKEN_LABEL_CALL) {
         print_loc(inst_token.loc);
         printf("[ERROR] invalid operands to for `jmp` instruction\n");
         printf("expected `jmp <base_reg>`\n");
@@ -534,7 +750,15 @@ uint16_t compile_jsr(Token inst_token, Token base_or_offset_11) {
     return inst;
 }
 
+// Main
+//
+//
+//
+//
+
 int main() {
+    Label_Hashmap lhm = label_hminit(100);
+
     char* file_path = "test.asm";
     size_t size = 0;
     char* content = read_file(file_path, &size);
@@ -548,76 +772,79 @@ int main() {
         printf("[ERROR] could not open out file `%s`: %s\n", out_path, strerror(errno));
         exit(1);
     }
+    Lexer first_pass_l = lex_new(content, size, file_path);
+    first_pass(&first_pass_l, &lhm); // first pass
     Lexer l = lex_new(content, size, file_path);
     Token t = {0};
+    bytes_count = 0;
     for (;l.cursor < l.size;) {
-        t = parse_next_token(&l);
+        t = parse_next_token(&l, &lhm);
         switch (t.type) {
             case TOKEN_ADD: {
-                Token dst_reg = parse_next_token(&l);
-                Token src_value1 = parse_next_token(&l);
-                Token src_value2 = parse_next_token(&l);
+                Token dst_reg = parse_next_token(&l, &lhm);
+                Token src_value1 = parse_next_token(&l, &lhm);
+                Token src_value2 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_add(t, dst_reg, src_value1, src_value2);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_AND: {
-                Token dst_reg = parse_next_token(&l);
-                Token src_value1 = parse_next_token(&l);
-                Token src_value2 = parse_next_token(&l);
+                Token dst_reg = parse_next_token(&l, &lhm);
+                Token src_value1 = parse_next_token(&l, &lhm);
+                Token src_value2 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_and(t, dst_reg, src_value1, src_value2);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_NOT: {
-                Token dst_reg = parse_next_token(&l);
-                Token src_reg = parse_next_token(&l);
+                Token dst_reg = parse_next_token(&l, &lhm);
+                Token src_reg = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_not(t, dst_reg, src_reg);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_BR: {
-                Token offset = parse_next_token(&l);
+                Token offset = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_br(t, offset);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_JMP: {
-                Token base_reg = parse_next_token(&l);
+                Token base_reg = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_jmp(t, base_reg);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_LD: {
-                Token dst_reg = parse_next_token(&l);
-                Token offset_9 = parse_next_token(&l);
+                Token dst_reg = parse_next_token(&l, &lhm);
+                Token offset_9 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_ld(t, dst_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_LDI: {
-                Token dst_reg = parse_next_token(&l);
-                Token offset_9 = parse_next_token(&l);
+                Token dst_reg = parse_next_token(&l, &lhm);
+                Token offset_9 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_ldi(t, dst_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_LDR: {
-                Token dst_reg = parse_next_token(&l);
-                Token base_reg = parse_next_token(&l);
-                Token offset_9 = parse_next_token(&l);
+                Token dst_reg = parse_next_token(&l, &lhm);
+                Token base_reg = parse_next_token(&l, &lhm);
+                Token offset_9 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_ldr(t, dst_reg, base_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_ST: {
-                Token src_reg = parse_next_token(&l);
-                Token offset_9 = parse_next_token(&l);
+                Token src_reg = parse_next_token(&l, &lhm);
+                Token offset_9 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_st(t, src_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_STI: {
-                Token src_reg = parse_next_token(&l);
-                Token offset_9 = parse_next_token(&l);
+                Token src_reg = parse_next_token(&l, &lhm);
+                Token offset_9 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_sti(t, src_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_STR: {
-                Token src_reg = parse_next_token(&l);
-                Token base_reg = parse_next_token(&l);
-                Token offset_9 = parse_next_token(&l);
+                Token src_reg = parse_next_token(&l, &lhm);
+                Token base_reg = parse_next_token(&l, &lhm);
+                Token offset_9 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_str(t, src_reg, base_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
@@ -626,19 +853,19 @@ int main() {
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_TRAP: {
-                Token trapvec_8 = parse_next_token(&l);
+                Token trapvec_8 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_trap(t, trapvec_8);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_LEA: {
-                Token dst_reg = parse_next_token(&l);
-                Token offset_9 = parse_next_token(&l);
+                Token dst_reg = parse_next_token(&l, &lhm);
+                Token offset_9 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_lea(t, dst_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_JSR: {
-                Token dst_reg = parse_next_token(&l);
-                Token offset_9 = parse_next_token(&l);
+                Token dst_reg = parse_next_token(&l, &lhm);
+                Token offset_9 = parse_next_token(&l, &lhm);
                 uint16_t inst = compile_lea(t, dst_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
