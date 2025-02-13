@@ -1,4 +1,4 @@
-#include <errno.h>
+#include <bits/pthreadtypes.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -10,9 +10,9 @@ typedef int16_t   Word;
 
 #define MEMORY_SIZE 65535
 
-typedef uint8_t Memory[MEMORY_SIZE]; // [ALERT] cant use signed char instead of uint8 
-                                     // as signed char get sign extended by C which messes with the data
-                                     // could also use `unsigned char`
+typedef uint16_t Memory[MEMORY_SIZE]; // [ALERT] cant use signed char instead of uint8 
+//                                      // as signed char get sign extended by C which messes with the data
+//                                      // could also use `unsigned char`
 
 static bool program_should_close = false;
  
@@ -44,6 +44,10 @@ enum Mem_Landmark {
 };
 
 typedef uWord Instruction;
+
+#define PSR_BIT_SSM (1 << 15)
+
+#define VEC_PRIV_MODE_VIOLATION (0x00)
 
 typedef enum {
     Op_BR   = 0,
@@ -96,18 +100,27 @@ typedef struct {
     size_t count; 
 } Byte_Data;
 
-Byte_Data* init_byte_data() {
-    Byte_Data* byte_data = malloc(sizeof(Byte_Data));
-    byte_data->count = 0;
-    byte_data->capacity = 5;
-    byte_data->bytes = malloc(sizeof(uWord)*byte_data->capacity);
+Byte_Data init_byte_data_size(size_t size) {
+    Byte_Data byte_data = {0};
+    byte_data.count = 0;
+    byte_data.capacity = size;
+    byte_data.bytes = malloc(sizeof(*byte_data.bytes)*byte_data.capacity);
+    return byte_data;
+}
+
+Byte_Data init_byte_data() {
+    Byte_Data byte_data = {0};
+    byte_data.count = 0;
+    byte_data.capacity = 5;
+    byte_data.bytes = (uint8_t*)malloc(sizeof(uWord)*byte_data.capacity);
     return byte_data;
 }
 
 void push_data(Byte_Data* byte_data, uWord data) {
-    if (byte_data->count+=1 > byte_data->capacity) {
-        byte_data = realloc(byte_data, byte_data->capacity + 5); 
-    } 
+    if (byte_data->count >= byte_data->capacity) {
+        byte_data->capacity = (byte_data->capacity + 1) * 2;
+        byte_data->bytes = realloc(byte_data->bytes, sizeof(uint8_t) * byte_data->capacity);
+    }
     byte_data->bytes[byte_data->count] = data;
     byte_data->count++;
 }
@@ -137,6 +150,7 @@ void set_flags_from_result(Machine* machine, Word result) {
     else if ((result & 0b1000000000000000) == 0) set_flags(machine, 0, 0, 1);
     else set_flags(machine, 1, 0, 0); 
 }
+
 
 void print_bits(unsigned int num) {
     for(int bit = 0; bit < (sizeof(unsigned int) * 8); bit++) {
@@ -215,27 +229,27 @@ void op_br(uWord rest, Machine* machine) {
     bool cond = n && ((machine->PSR & 0b0000000000000100) != 0) 
              || z && ((machine->PSR & 0b0000000000000010) != 0)
              || p && ((machine->PSR & 0b0000000000000001) != 0);
-    if (cond) machine->PC += (int16_t)sext(offset * 2, 9);
+    if (cond) machine->PC += (int16_t)sext(offset, 9);
 }
 
 void op_jmp(uWord rest, Machine* machine) {
     uWord BaseR_id = rest & 0b0000000111000000; 
-    BaseR_id = BaseR_id >> 6;
+    BaseR_id >>= 6;
 
     machine->PC = machine->registers[BaseR_id];
 }
 
 void op_jsr(uWord rest, Machine* machine) {
-    machine->registers[7] = machine->PC+1; 
+    machine->registers[7] = machine->PC; 
     int offset = rest & 0b0000011111111111;
 
-    machine->PC+=sext(offset, 11) - 1;
+    machine->PC += sext(offset, 11);
 }
 
 void op_jsrr(uWord rest, Machine* machine) {
-    machine->registers[7] = machine->PC+1; 
+    machine->registers[7] = machine->PC; 
     uWord BaseR_id = rest & 0b0000000111000000;
-    BaseR_id = BaseR_id << 6;
+    BaseR_id >>= 6;
     
     machine->PC = machine->registers[BaseR_id];
 }
@@ -244,7 +258,7 @@ void op_ld(uWord rest, Machine* machine, Memory memory) {
     uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111); 
 
-    int8_t result = (int8_t)memory[machine->PC + sext(offset, 9)]; 
+    uint16_t result = memory[machine->PC + sext(offset, 9)];
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
@@ -267,7 +281,8 @@ void op_ldr(uWord rest, Machine* machine, Memory memory) {
     uWord BaseR_id = (rest & 0b0000000111000000) >> 6;
     uWord offset   = (rest & 0b0000000000111111); 
 
-    Word result = (Word)memory[machine->registers[BaseR_id] + sext(offset, 6)];
+    uWord abs_addr = machine->registers[BaseR_id] + (offset);
+    uWord result = memory[abs_addr] | memory[abs_addr + 1] << 8;
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
@@ -277,7 +292,7 @@ void op_lea(uWord rest, Machine* machine) {
     uWord DR_id  = (rest & 0b0000111000000000) >> 9; 
     uWord offset = (rest & 0b0000000111111111);
 
-    Word result = machine->PC + sext(offset, 9) - 1;
+    uWord result = machine->PC + sext(offset, 9);
     machine->registers[DR_id] = result;
 
     set_flags_from_result(machine, result);
@@ -305,6 +320,39 @@ void op_str(uWord rest, Machine* machine, Memory memory) {
     uWord offset   = (rest & 0b0000000000111111); 
 
     memory[machine->registers[BaseR_id] + sext(offset, 6)] = machine->registers[SR_id];
+}
+
+void op_rti(uWord rest, Machine* machine, Memory memory) {
+    if ((machine->PSR & PSR_BIT_SSM) != 0) {
+        machine->registers[6] = MEM_OSSPC_END;
+        machine->registers[6] -= 2;
+        memory[machine->registers[6] + 1] = machine->PSR;
+        memory[machine->registers[6] + 2] = machine->PC;
+        machine->PSR |= PSR_BIT_SSM;
+        machine->PC = memory[VEC_PRIV_MODE_VIOLATION];
+    }
+    machine->PSR = memory[machine->registers[6]++];
+    machine->PC = memory[machine->registers[6]++];
+}
+
+void op_trap(uWord rest, Machine* machine, Memory memory) {
+    uint8_t trap_8 = rest & 0b11111111;
+    if (trap_8 == 0x25) {
+        program_should_close = true;
+        printf("halting cpu\n");
+        return;
+    }
+
+    uWord addr = memory[trap_8];
+
+    machine->registers[6] = MEM_OSSPC_END;
+
+    memory[--machine->registers[6]] = machine->PSR;
+    memory[--machine->registers[6]] = machine->PC;
+
+    machine->PSR |= PSR_BIT_SSM;
+    machine->registers[7] = machine->PC;
+    machine->PC = addr;
 }
 
 bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
@@ -359,7 +407,8 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
             op_str(rest, machine, memory);
         } break;
 
-        case Op_RTI: break;
+        case Op_RTI: {
+        } break;
 
         case Op_NOT: {
             op_not(rest, machine);
@@ -387,8 +436,7 @@ bool execute_instruction(Machine* machine, Instruction inst, Memory memory) {
         } break;
 
         case Op_TRAP: {
-            program_should_close = true;
-            printf("halting program\n");
+            op_trap(rest, machine, memory);
         } break;
     }
     return true;
@@ -400,18 +448,15 @@ void execute_program(Machine* machine, Memory memory) {
             printf("End of Memory Reached\n");
             return;
         }
-        uWord inst1 = memory[machine->PC];
-        uWord inst2 = memory[machine->PC + 1];
-        uWord inst = (inst2 << 8 | inst1);
-        machine->PC += 2;
+        uWord inst = memory[machine->PC++];
         bool res = execute_instruction(machine, inst, memory);
         if (!res) printf("ERROR: Instruction no %u\n", machine->PC);
     }
 }
 
-void print_byte_data(const Byte_Data* byte_data) {
-    for (int i = 0; i < byte_data->count; i++) {
-        printf("%d:%d\n", i, byte_data->bytes[i]);
+void print_byte_data(const Byte_Data byte_data) {
+    for (int i = 0; i < byte_data.count; i++) {
+        printf("%d:%x\n", i, byte_data.bytes[i]);
     }
 }
 
@@ -426,15 +471,12 @@ void print_machine_state(const Machine* machine) {
     printf("p:%d\n", (machine->PSR & 0b0000000000000100) != 0);
 }
 
-bool map_byte_data(Memory memory, const Byte_Data* byte_data, size_t loc, 
-                   size_t offset) {
-    if (loc + offset + byte_data->count > MEMORY_SIZE) {
+bool map_byte_data(Memory memory, const Byte_Data* byte_data, size_t loc) {
+    if (loc + byte_data->count > MEMORY_SIZE) {
         printf("[ERROR] mapped data is too large for memory\n");
         return false;
     }
-    for (int i = 0; i < byte_data->count; i++) {
-        memory[i + loc + offset] = byte_data->bytes[i];
-    }
+    memcpy(memory, byte_data->bytes, byte_data->count);
     return true;
 }
 
@@ -455,28 +497,24 @@ char* read_file(const char* file_name) {
     return content;
 }
 
-Byte_Data* read_bin_from_file(char* file_name) {
+Byte_Data read_bin_from_file(char* file_name) {
     FILE* fh;
     fh = fopen(file_name, "rb");
     if (!fh) {
         printf("[ERROR] could not open specified file `%s`", file_name);
-        return NULL;
+        exit(1);
     }
 
     fseek(fh, 0, SEEK_END);
     size_t length = ftell(fh);
     fseek(fh, 0, SEEK_SET);
 
-    Byte_Data* byte_data = init_byte_data();
-
-    char byte = 0;
-    for (int i = 0; i < length; i++) {
-        int ok = fread(&byte, 1, 1, fh);
-        if (!ok) {
-            printf("[ERROR] error reading binary data for file `%s`", file_name);
-            return NULL;
-        }
-        push_data(byte_data, byte);
+    Byte_Data byte_data = init_byte_data_size(length);
+    byte_data.count = length;
+    int ok = fread(byte_data.bytes, 1, length, fh);
+    if (!ok) {
+        printf("[ERROR] error reading binary data for file `%s`", file_name);
+        exit(1);
     }
 
     return byte_data;
@@ -518,26 +556,26 @@ int main(int argc, char** argv) {
             os_file_name = argv[i+1];
         } 
     }
-    if (loados) {
-        Byte_Data* os = read_bin_from_file(os_file_name);
-        if (!os) {
-            printf("[ERROR] could not load os file `%s`: %s\n", os_file_name, strerror(errno));
-        }
-    }
-    if (!loadprogram){
+    if (!loadprogram && !loados){
         printf("Please provide a program file name to load\n");
         printf("atleast one file is required to run the emulator\n");
-        printf("Usage: -b <executable_file_path>\n");
+        printf("for raw files: ");
+        printf("   Usage: -b <executable_file_path>\n");
+        printf("for os files: ");
+        printf("   Usage: -os <os_file_path>\n");
         return -1;
-    } else {
-        Byte_Data* byte_data = read_bin_from_file(program_file_name);
-        if (!byte_data) {
-            printf("[ERROR] could not load program file `%s`: %s\n", program_file_name, strerror(errno));
-        }
-        map_byte_data(memory, byte_data, MEM_BEGIN, 0);
-        machine.PC = MEM_BEGIN;
-        execute_program(&machine, memory);
     }
+    if (loados) {
+        Byte_Data os = read_bin_from_file(os_file_name);
+        map_byte_data(memory, &os, MEM_OSSPC_BEGIN);
+        machine.PC = MEM_OSSPC_BEGIN;
+    } else {
+        machine.PC = MEM_USERSPC_BEGIN;
+    } 
+    if (loadprogram) {
+        Byte_Data byte_data = read_bin_from_file(program_file_name);
+    }
+    execute_program(&machine, memory);
     print_machine_state(&machine);
 }
 
