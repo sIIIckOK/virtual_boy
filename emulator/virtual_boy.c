@@ -589,8 +589,8 @@ int main(int argc, char** argv) {
     machine.PSR |= PSR_BIT_Z;
     Memory memory = {0};
 
-    char* os_file_name;
-    char* program_file_name;
+    char* os_file_name = "./os.bin";
+    char* program_file_name = 0;
     bool loados = false;
     bool loadprogram = false;
 

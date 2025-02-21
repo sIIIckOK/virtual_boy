@@ -1,3 +1,5 @@
+# NOTES 
+this is an incomplete project that made for education purposes, so its not supposed to be used in serious settings.  
 
 # A Virtual Machine For LC3 Architecture
 - Written completely in c
@@ -6,9 +8,6 @@
 ## References
 - [About Instruction Set](https://www.cs.colostate.edu/~cs270/.Fall18/resources/PattPatelAppA.pdf)
 
-## Important Notes
-- Interrupts and Traps are not supported yet, except for `1111000000000000` which is the HALT instruction.
-
 # Quick Start
 
 ## The VM
@@ -16,12 +15,19 @@ The virtual boy program is: `emulator/bin/vboy`.
 And, the examples programs are in `examples/`, with the .bin extension.
 
 ```bash
-./emulator/bin/vboy -b ./examples/add_two_numbers.dat
+./emulator/bin/vboy -b ./testout/print.bin
 ```
-* __NOTE__: do not forget the `-b` flag
+
+You can also specify a custom os like this:  
+```bash
+./emulator/bin/vboy -os ./os.s -b ./testout/print.bin
+```
 
 ## The Assembler
-There is an assembler that is a part of this project that is currently in development\
+There is an assembler that is a part of this project  
+look at assembler/assembler.c for the source  
+for the assembler syntax see os.s  
+
 here is the basic syntax:
 ```asm
 add %r0 %r0 #1
@@ -31,9 +37,10 @@ add %r0 %r0 #1
 registers are prefixed with `%`\
 there is r0-r7 general purpose registers
 
-### Int Literals (only decimal supported for now)
+### Int Literals
 int literals (only decimals supported for now) are prefixed with `#`\
-negetive literals would be `#-1` for example
+negetive literals would be `#-1` for example  
+for hex literals use `#x`, so `#xff` for example  
 
 ### Labels
 labels are prefixed with `$`\
@@ -50,33 +57,5 @@ this assembler is designed the way it is for the simplicity of implementation, t
 For example compared to conventional assemblers that are new line sensitive, where each instruction needs to be in a new line,\
 this assembler treats new lines and spaces the same, so in theory you can write multiple instructions in the same line.
 
-## The Byte Writer (__About to be deprecated__)
-There is no assembly to write programs for this virtual machine yet,\
-instead we use a header file, located in `byte_writer/byte_writer.h`.\
-It contains all the functions in order to create a binary executables for the VM.  
+__NOTE__: the Byte Writer is deprecated and is no longer used to make binaries, use the assembler instead  
 
-Here is one examples code, more can be found in `examples/`:
-```c
-#include "../byte_writer.h"
-
-#define OUTPUT_FILE "add_two_numbers.dat"
-
-int main() {
-    Byte_Data* byte_data = init_byte_data(); 
-
-                         // instruction
-    push_data(byte_data, 0b0101000000100000);
-    push_data(byte_data, 0b0001000000100101);
-
-    push_data(byte_data, 0b0101001001100000);
-    push_data(byte_data, 0b0001001001100010);
-
-    push_data(byte_data, 0b0001010000000001);
-
-    // HALT:
-    push_data(byte_data, 0b1111000000000000); 
-
-    write_bin_to_file(byte_data, OUTPUT_FILE);
-    free(byte_data);
-}
-```
