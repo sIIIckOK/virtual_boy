@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <time.h>
 
 #define MAX_UINT16_T 65535
@@ -68,38 +69,44 @@ typedef struct {
     size_t count;
 } Label_Hashmap;
 
-Label_Hashmap label_hminit(size_t init_cap) {
-    Label_Element *labels =
-        (Label_Element *)malloc(sizeof(Label_Element) * init_cap);
+#define LABEL_HASHMAP_DEF_CAP 500
+Label_Hashmap label_hminit() {
+    size_t buf_size = LABEL_HASHMAP_DEF_CAP * sizeof(Label_Element);
+
+    Label_Element *labels = (Label_Element *)malloc(buf_size);
+    memset(labels, 0, buf_size);
     return (Label_Hashmap){
-        .capacity = init_cap,
+        .capacity = LABEL_HASHMAP_DEF_CAP,
         .labels = labels,
     };
 }
 
-void insert_label(Label_Hashmap *lhm, const String_View key,
-                  const Label value) {
-    if (lhm->count + 1 >= lhm->capacity) {
-        lhm->capacity *= 2;
-        size_t *labels =
-            (size_t *)realloc(lhm->labels, sizeof(size_t) * lhm->capacity);
-    }
+void 
+insert_label(
+    Label_Hashmap *lhm, 
+    const String_View key,
+    const Label value
+) {
+    // TODO(@siiick): make this a resizable hashmap
+    assert(lhm->count + 1 < lhm->capacity && "make the hashmap bigger");
     size_t hash = hash_string_view(key);
-    hash %= lhm->capacity;
+    size_t addr = hash % lhm->capacity;
     Label_Element element = {
         .is_occupied = true,
         .next = NULL,
         .bytes_count = value.bytes_count,
         .content = value.content,
     };
-    Label_Element *old_elem = &lhm->labels[hash];
-    if (old_elem->is_occupied && old_elem != NULL) {
-        while (old_elem->next != NULL) old_elem = old_elem->next;
-        Label_Element *new_elem = (Label_Element *)malloc(sizeof(Label_Element));
-        old_elem->next = new_elem;
-        *new_elem = element;
+    Label_Element *old_elem = &lhm->labels[addr];
+    if (old_elem->is_occupied) {
+        while (old_elem->next) {
+            old_elem = old_elem->next;
+        }
+        Label_Element* new_element = malloc(sizeof(*new_element));
+        *new_element = element;
+        old_elem->next = new_element;
     } else {
-        lhm->labels[hash] = element;
+        lhm->labels[addr] = element;
     }
     lhm->count++; 
 }
@@ -139,8 +146,7 @@ char *read_file(const char *file_name, size_t *size) {
     FILE *file;
     file = fopen(file_name, "r");
 
-    if (file == NULL)
-        return NULL;
+    if (file == NULL) return NULL;
 
     fseek(file, 0, SEEK_END);
     int len = ftell(file);
@@ -150,8 +156,7 @@ char *read_file(const char *file_name, size_t *size) {
     for (int i = 0; i < len; i++) {
         content[i] = fgetc(file);
     }
-    if (size)
-        *size = len;
+    if (size) *size = len;
     return content;
 }
 
@@ -256,15 +261,19 @@ typedef enum {
     TOKEN_BR,
     TOKEN_COUNT,
 
-    TOKEN_END,
-    TOKEN_ILLEGAL,
     TOKEN_REG,
+
     TOKEN_LABEL_DEF,
     TOKEN_LABEL_CALL,
+
     TOKEN_INT_LIT,
     TOKEN_STR_LIT,
+
     TOKEN_DIR_ORG,
     TOKEN_DIR_STRINGZ,
+
+    TOKEN_END,
+    TOKEN_ILLEGAL,
 
     TOKEN_DIR_FILL,
 } Token_Type;
@@ -303,8 +312,6 @@ typedef struct {
     Location loc;
 } Token;
 
-size_t word_count = 0;
-size_t max_org_value = 0;
 
 Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
     Token t = {0};
@@ -350,6 +357,10 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
             } else if (sv_cmp(st.content, SV_STATIC("stringz"))) {
                 t.type = TOKEN_DIR_STRINGZ;
                 return t;
+            } else {
+                print_loc(st.loc);
+                printf("unknown directive `"SV_FMT"`\n", SV_ARG(st.content));
+                exit(1);
             }
         } else if (st.content.data[0] == '$') {
             if (st.content.data[st.content.len - 1] == ':') {
@@ -367,8 +378,10 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
             t.operand = lbl.bytes_count;
             return t;
         } else if (st.content.data[0] == '#') {
+            bool is_neg = false;
             st.content.data++;
             st.content.len--;
+            if (st.content.data[0] == '-') is_neg = true;
             if (st.content.data[0] == 'x') {
                 st.content.data++;
                 st.content.len--;
@@ -379,12 +392,13 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
                     } else if (st.content.data[i] >= 'a' && st.content.data[i] <= 'f') {
                         number = number * 16 + (st.content.data[i] - 'a' + 10);
                     } else {
+                        print_loc(st.loc);
                         printf("[ERROR] invalid hexadecimal literal`" SV_FMT "`\n",
                                SV_ARG(st.content));
                         exit(1);
                     }
                 }
-                t.operand = number;
+                t.operand = is_neg ? -number: number;
                 t.type = TOKEN_INT_LIT;
                 return t;
             } else if (st.content.data[0] == 'b') {
@@ -399,6 +413,7 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
                             number |= 1 << i;
                         } break;
                         default: {
+                            print_loc(st.loc);
                             printf("[ERROR] invalid binary literal`" SV_FMT "`\n",
                                    SV_ARG(st.content));
                             exit(1);
@@ -416,6 +431,7 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
                 st.content.len--;
             }
             if (st.content.len == 0) {
+                print_loc(st.loc);
                 printf("[ERROR] invalid int literal`" SV_FMT "`\n", SV_ARG(st.content));
                 printf("for hexadecimal literals use `#x`");
                 printf("and for binary iterals use `#b`");
@@ -424,6 +440,7 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
             int number = 0;
             for (int i = 0; i < st.content.len; i++) {
                 if (!isdigit(st.content.data[i])) {
+                    print_loc(st.loc);
                     printf("[ERROR] invalid int literal`" SV_FMT "`\n",
                            SV_ARG(st.content));
                     exit(1);
@@ -507,8 +524,9 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
             t.operand = operand;
             return t;
         } else {
-            t.type = TOKEN_ILLEGAL;
-            return t;
+            print_loc(st.loc);
+            printf("unknown token `"SV_FMT"`\n", SV_ARG(st.content));
+            exit(1);
         }
     }
     return t;
@@ -516,6 +534,7 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
 
 void first_pass(Lexer *l, Label_Hashmap *lhm) {
     size_t current_org_val = 0;
+    size_t word_count_l = 1;
     for (; l->cursor < l->size;) {
         String_Token st = lex_chop_token(l);
         if (st.content.len == 0)
@@ -528,13 +547,13 @@ void first_pass(Lexer *l, Label_Hashmap *lhm) {
             }
             st.content.data++;
             st.content.len -= 2;
-            Label lbl = new_label(st.content, word_count + current_org_val);
             Label check = get_label(lhm, st.content);
             if (check.content.data != NULL) {
                 print_loc(st.loc);
                 printf("[ERROR] label redefined `" SV_FMT "`\n", SV_ARG(st.content));
                 exit(1);
             }
+            Label lbl = new_label(st.content, word_count_l);
             insert_label(lhm, st.content, lbl);
         } else if (sv_cmp(st.content, SV_STATIC(".org"))) {
             st = lex_chop_token(l);
@@ -556,52 +575,63 @@ void first_pass(Lexer *l, Label_Hashmap *lhm) {
                             exit(1);
                         }
                     }
-                    current_org_val = word_count = number;
+                    word_count_l = number;
+                    current_org_val = number;
                 }
             } else {
                 continue;
             }
-        } else if (sv_cmp(st.content, SV_STATIC("add"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("not"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("and"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("jmp"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("ld"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("ldi"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("ldr"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("st"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("sti"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("str"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("rti"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("trap"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("jsr"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("jsrr"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("ret"))) {
-            word_count += 1;
-        } else if (sv_cmp(st.content, SV_STATIC("br"))) {
-            word_count += 1;
+        } else if (sv_cmp(st.content, SV_STATIC(".stringz"))) {
+            String_Token st = lex_chop_token(l);
+            if (st.content.data[0] != '"') {
+                print_loc(st.loc);
+                printf("[ERROR] expected string literal\n");
+                exit(1);
+            }
+            st.content.len -= 2;
+            word_count_l += st.content.len;
         } else if (sv_cmp(st.content, SV_STATIC(".fill"))) {
-            word_count += 1;
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("add"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("not"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("and"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("jmp"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("ld"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("ldi"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("ldr"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("st"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("sti"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("str"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("rti"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("trap"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("jsr"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("jsrr"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("ret"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("br"))) {
+            word_count_l += 1;
+        } else if (sv_cmp(st.content, SV_STATIC("lea"))) {
+            word_count_l += 1;
         }
     }
 }
 
 int16_t get_label_pc_offset(uint16_t pc, uint16_t label_word) {
-    int16_t diff = (label_word - pc * 2) - 1;
-    return diff;
+    return label_word - pc - 1;
 }
 
 uint16_t compile_add(Token inst_token, Token dst, Token src1, Token src2) {
@@ -679,7 +709,7 @@ uint16_t compile_not(Token inst_token, Token dst_reg, Token src_reg) {
     return inst;
 }
 
-uint16_t compile_br(Token inst_token, Token offset_9) {
+uint16_t compile_br(Token inst_token, Token offset_9, size_t pc) {
     if (!(offset_9.type == TOKEN_INT_LIT || offset_9.type == TOKEN_LABEL_CALL)) {
         print_loc(inst_token.loc);
         printf("[ERROR] invalid operands to for `br` instruction\n");
@@ -693,7 +723,7 @@ uint16_t compile_br(Token inst_token, Token offset_9) {
     if (offset_9.type == TOKEN_INT_LIT) {
         inst |= (offset_9.operand & 0b111111111) << 0;
     } else if (offset_9.type == TOKEN_LABEL_CALL) {
-        int rel_addr = get_label_pc_offset(word_count, offset_9.operand);
+        int16_t rel_addr = get_label_pc_offset(pc, offset_9.operand);
         inst |= (rel_addr & 0b111111111) << 0;
     } else {
         assert(false && "compile_br unreachable");
@@ -722,7 +752,7 @@ uint16_t compile_ret(Token inst_token) {
     return inst;
 }
 
-uint16_t compile_ld(Token inst_token, Token dst_reg, Token offset_9) {
+uint16_t compile_ld(Token inst_token, Token dst_reg, Token offset_9, size_t pc) {
     if (!(dst_reg.type == TOKEN_REG || offset_9.type == TOKEN_INT_LIT ||
         offset_9.type == TOKEN_LABEL_CALL)) {
         print_loc(inst_token.loc);
@@ -737,7 +767,7 @@ uint16_t compile_ld(Token inst_token, Token dst_reg, Token offset_9) {
         inst |= (offset_9.operand & 0b111111111);
         return inst;
     } else if (offset_9.type == TOKEN_LABEL_CALL) {
-        int16_t offset = get_label_pc_offset(word_count, offset_9.operand);
+        int16_t offset = get_label_pc_offset(pc, offset_9.operand);
         inst |= (offset & 0b111111111);
         return inst;
     } else {
@@ -745,7 +775,7 @@ uint16_t compile_ld(Token inst_token, Token dst_reg, Token offset_9) {
     }
 }
 uint16_t compile_ldi(Token inst_token, Token dst_reg, Token offset_9) {
-    if (dst_reg.type != TOKEN_REG || offset_9.type != TOKEN_INT_LIT) {
+    if (!(dst_reg.type == TOKEN_REG || offset_9.type == TOKEN_INT_LIT)) {
         print_loc(inst_token.loc);
         printf("[ERROR] invalid operands to for `ldi` instruction\n");
         printf("expected `ldi <dst_reg> <pc_offset(9)>`\n");
@@ -775,8 +805,8 @@ uint16_t compile_ldr(Token inst_token, Token dst_reg, Token base_reg,
     return inst;
 }
 
-uint16_t compile_st(Token inst_token, Token src_reg, Token offset_9) {
-    if (src_reg.type != TOKEN_REG || offset_9.type != TOKEN_INT_LIT) {
+uint16_t compile_st(Token inst_token, Token src_reg, Token offset_9, size_t pc) {
+    if (!(src_reg.type == TOKEN_REG || offset_9.type == TOKEN_INT_LIT || offset_9.type == TOKEN_LABEL_CALL)) {
         print_loc(inst_token.loc);
         printf("[ERROR] invalid operands to for `st` instruction\n");
         printf("expected `st <src_reg> <pc_offset(9)>`\n");
@@ -785,12 +815,19 @@ uint16_t compile_st(Token inst_token, Token src_reg, Token offset_9) {
     uint16_t inst = 0;
     inst |= 0b0011 << 12;
     inst |= (src_reg.operand & 0b111) << 9;
-    inst |= (offset_9.operand & 0b111111111);
+    if (offset_9.type == TOKEN_INT_LIT) {
+        inst |= (offset_9.operand & 0b111111111);
+    } else if (offset_9.type == TOKEN_LABEL_CALL) {
+        int16_t offset = get_label_pc_offset(pc, offset_9.operand);
+        inst |= (offset & 0b111111111);
+    } else {
+        assert(false && "unreachable");
+    }
     return inst;
 }
 
 uint16_t compile_sti(Token inst_token, Token src_reg, Token offset_9) {
-    if (src_reg.type != TOKEN_REG || offset_9.type != TOKEN_INT_LIT) {
+    if (!(src_reg.type == TOKEN_REG || offset_9.type == TOKEN_INT_LIT)) {
         print_loc(inst_token.loc);
         printf("[ERROR] invalid operands to for `sti` instruction\n");
         printf("expected `sti <src_reg> <pc_offset(9)>`\n");
@@ -844,7 +881,7 @@ uint16_t compile_trap(Token inst_token, Token trapvect_8) {
     return inst;
 }
 
-uint16_t compile_lea(Token inst_token, Token dst_reg, Token offset_9) {
+uint16_t compile_lea(Token inst_token, Token dst_reg, Token offset_9, size_t pc) {
     if (dst_reg.type != TOKEN_REG || 
         !(offset_9.type == TOKEN_INT_LIT || offset_9.type == TOKEN_LABEL_CALL)) 
     {
@@ -860,7 +897,7 @@ uint16_t compile_lea(Token inst_token, Token dst_reg, Token offset_9) {
         inst |= (offset_9.operand & 0b111111111);
         return inst;
     } else if (offset_9.type == TOKEN_LABEL_CALL) {
-        int16_t offset = get_label_pc_offset(word_count, offset_9.operand) + 1;
+        int16_t offset = get_label_pc_offset(pc, offset_9.operand) - 1;
         inst |= (offset & 0b111111111);
         return inst;
     } else {
@@ -868,7 +905,7 @@ uint16_t compile_lea(Token inst_token, Token dst_reg, Token offset_9) {
     }
 }
 
-uint16_t compile_jsr(Token inst_token, Token base_or_offset_11) {
+uint16_t compile_jsr(Token inst_token, Token base_or_offset_11, size_t pc) {
     if (!(base_or_offset_11.type == TOKEN_INT_LIT || base_or_offset_11.type == TOKEN_LABEL_CALL)) {
         print_loc(inst_token.loc);
         printf("[ERROR] invalid operands to for `jsr` instruction\n");
@@ -881,7 +918,7 @@ uint16_t compile_jsr(Token inst_token, Token base_or_offset_11) {
     if (base_or_offset_11.type == TOKEN_INT_LIT) {
         inst |= (base_or_offset_11.operand & 0b11111111111);
     } else if (base_or_offset_11.type == TOKEN_LABEL_CALL) {
-        int16_t offset = get_label_pc_offset(word_count, base_or_offset_11.operand);
+        int16_t offset = get_label_pc_offset(pc, base_or_offset_11.operand);
         inst |= offset & 0b11111111111;
         return inst;
     } else {
@@ -897,105 +934,98 @@ uint16_t compile_jsrr(Token inst_token, Token src_reg) {
         printf("expected `jsr <dst_reg> <pc_offset(9)>`\n");
         exit(1);
     }
-    printf("src_reg %u\n", src_reg.operand);
     uint16_t inst = 0;
     inst |= 0b0100 << 12;
     inst |= (src_reg.operand & 0b111) << 6;
     return inst;
 }
 
-int main() {
-    Label_Hashmap lhm = label_hminit(100);
+void print_usage(char* program) {
+    printf("Usage: \n");
+    printf("    %s <intput-file> -o <out-path>\n", program);
+}
 
-    char *file_path = "test.asm";
-    size_t size = 0;
-    char *content = read_file(file_path, &size);
-    if (!content) {
-        printf("[ERROR] could not read file %s: %s\n", file_path, strerror(errno));
-        exit(1);
-    }
-    char *out_path = "test.bin";
-    FILE *out_file = fopen(out_path, "wb");
-    if (!out_file) {
-        printf("[ERROR] could not open out file `%s`: %s\n", out_path,
-               strerror(errno));
-        exit(1);
-    }
+void shift(int* argc, char*** argv) {
+    (*argv)++;
+    (*argc)--;
+}
 
-    Lexer first_pass_l = lex_new(content, size, file_path);
-    first_pass(&first_pass_l, &lhm);
-    Lexer l = lex_new(content, size, file_path);
+void die_usage(char* program) {
+    print_usage(program); 
+    exit(1);
+}
+
+void compile_program(Lexer* l, Label_Hashmap* lhm, FILE* out_file) {
     Token t = {0};
-    word_count = 0;
-
-    for (; l.cursor < l.size;) {
-        t = parse_next_token(&l, &lhm);
+    size_t word_count = 0;
+    for (; l->cursor < l->size;) {
+        t = parse_next_token(l, lhm);
         switch (t.type) {
             case TOKEN_ADD: {
-                Token dst_reg = parse_next_token(&l, &lhm);
-                Token src_value1 = parse_next_token(&l, &lhm);
-                Token src_value2 = parse_next_token(&l, &lhm);
+                Token dst_reg = parse_next_token(l, lhm);
+                Token src_value1 = parse_next_token(l, lhm);
+                Token src_value2 = parse_next_token(l, lhm);
                 uint16_t inst = compile_add(t, dst_reg, src_value1, src_value2);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_AND: {
-                Token dst_reg = parse_next_token(&l, &lhm);
-                Token src_value1 = parse_next_token(&l, &lhm);
-                Token src_value2 = parse_next_token(&l, &lhm);
+                Token dst_reg = parse_next_token(l, lhm);
+                Token src_value1 = parse_next_token(l, lhm);
+                Token src_value2 = parse_next_token(l, lhm);
                 uint16_t inst = compile_and(t, dst_reg, src_value1, src_value2);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_NOT: {
-                Token dst_reg = parse_next_token(&l, &lhm);
-                Token src_reg = parse_next_token(&l, &lhm);
+                Token dst_reg = parse_next_token(l, lhm);
+                Token src_reg = parse_next_token(l, lhm);
                 uint16_t inst = compile_not(t, dst_reg, src_reg);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_BR: {
-                Token offset = parse_next_token(&l, &lhm);
-                uint16_t inst = compile_br(t, offset);
+                Token offset = parse_next_token(l, lhm);
+                uint16_t inst = compile_br(t, offset, word_count);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_JMP: {
-                Token base_reg = parse_next_token(&l, &lhm);
+                Token base_reg = parse_next_token(l, lhm);
                 uint16_t inst = compile_jmp(t, base_reg);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_LD: {
-                Token dst_reg = parse_next_token(&l, &lhm);
-                Token offset_9 = parse_next_token(&l, &lhm);
-                uint16_t inst = compile_ld(t, dst_reg, offset_9);
+                Token dst_reg = parse_next_token(l, lhm);
+                Token offset_9 = parse_next_token(l, lhm);
+                uint16_t inst = compile_ld(t, dst_reg, offset_9, word_count);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_LDI: {
-                Token dst_reg = parse_next_token(&l, &lhm);
-                Token offset_9 = parse_next_token(&l, &lhm);
+                Token dst_reg = parse_next_token(l, lhm);
+                Token offset_9 = parse_next_token(l, lhm);
                 uint16_t inst = compile_ldi(t, dst_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_LDR: {
-                Token dst_reg = parse_next_token(&l, &lhm);
-                Token base_reg = parse_next_token(&l, &lhm);
-                Token offset_9 = parse_next_token(&l, &lhm);
+                Token dst_reg = parse_next_token(l, lhm);
+                Token base_reg = parse_next_token(l, lhm);
+                Token offset_9 = parse_next_token(l, lhm);
                 uint16_t inst = compile_ldr(t, dst_reg, base_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_ST: {
-                Token src_reg = parse_next_token(&l, &lhm);
-                Token offset_9 = parse_next_token(&l, &lhm);
-                uint16_t inst = compile_st(t, src_reg, offset_9);
+                Token src_reg = parse_next_token(l, lhm);
+                Token offset_9 = parse_next_token(l, lhm);
+                uint16_t inst = compile_st(t, src_reg, offset_9, word_count);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_STI: {
-                Token src_reg = parse_next_token(&l, &lhm);
-                Token offset_9 = parse_next_token(&l, &lhm);
+                Token src_reg = parse_next_token(l, lhm);
+                Token offset_9 = parse_next_token(l, lhm);
                 uint16_t inst = compile_sti(t, src_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_STR: {
-                Token src_reg = parse_next_token(&l, &lhm);
-                Token base_reg = parse_next_token(&l, &lhm);
-                Token offset_9 = parse_next_token(&l, &lhm);
+                Token src_reg = parse_next_token(l, lhm);
+                Token base_reg = parse_next_token(l, lhm);
+                Token offset_9 = parse_next_token(l, lhm);
                 uint16_t inst = compile_str(t, src_reg, base_reg, offset_9);
                 fwrite(&inst, 2, 1, out_file);
             } break;
@@ -1004,23 +1034,23 @@ int main() {
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_TRAP: {
-                Token trapvec_8 = parse_next_token(&l, &lhm);
+                Token trapvec_8 = parse_next_token(l, lhm);
                 uint16_t inst = compile_trap(t, trapvec_8);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_LEA: {
-                Token dst_reg = parse_next_token(&l, &lhm);
-                Token offset_9 = parse_next_token(&l, &lhm);
-                uint16_t inst = compile_lea(t, dst_reg, offset_9);
+                Token dst_reg = parse_next_token(l, lhm);
+                Token offset_9 = parse_next_token(l, lhm);
+                uint16_t inst = compile_lea(t, dst_reg, offset_9, word_count);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_JSR: {
-                Token offset_9 = parse_next_token(&l, &lhm);
-                uint16_t inst = compile_jsr(t, offset_9);
+                Token offset_9 = parse_next_token(l, lhm);
+                uint16_t inst = compile_jsr(t, offset_9, word_count);
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_JSRR: {
-                Token src_reg = parse_next_token(&l, &lhm);
+                Token src_reg = parse_next_token(l, lhm);
                 uint16_t inst = compile_jsrr(t, src_reg);
                 fwrite(&inst, 2, 1, out_file);
             } break;
@@ -1029,7 +1059,7 @@ int main() {
                 fwrite(&inst, 2, 1, out_file);
             } break;
             case TOKEN_DIR_FILL: {
-                Token fill_word = parse_next_token(&l, &lhm);
+                Token fill_word = parse_next_token(l, lhm);
                 if (!(fill_word.type == TOKEN_INT_LIT ||
                     fill_word.type == TOKEN_LABEL_CALL)) {
                     print_loc(fill_word.loc);
@@ -1054,11 +1084,16 @@ int main() {
                 word_count += 1;
             } break;
             case TOKEN_DIR_ORG: {
-                Token org_amount = parse_next_token(&l, &lhm);
+                Token org_amount = parse_next_token(l, lhm);
                 if (org_amount.type != TOKEN_INT_LIT || org_amount.operand < 0) {
                     print_loc(org_amount.loc);
                     printf("[ERROR] expected int literal found `" SV_FMT "`\n",
                            SV_ARG(org_amount.content));
+                    exit(1);
+                }
+                if (org_amount.operand < word_count) {
+                    print_loc(org_amount.loc);
+                    printf("org values are supposed to be ascending\n");
                     exit(1);
                 }
                 size_t diff_in_bytes = org_amount.operand - word_count;
@@ -1066,10 +1101,10 @@ int main() {
                 for (int i = 0; i < diff_in_bytes; i++) {
                     fwrite(&zero_word, 2, 1, out_file);
                 }
-                max_org_value = word_count = org_amount.operand;
+                word_count = org_amount.operand;
             } break;
             case TOKEN_DIR_STRINGZ: {
-                Token string = parse_next_token(&l, &lhm);
+                Token string = parse_next_token(l, lhm);
                 if (string.type != TOKEN_STR_LIT) {
                     print_loc(t.loc);
                     printf("[ERROR] expected string literal\n");
@@ -1081,6 +1116,7 @@ int main() {
                     uint16_t word = (uint16_t)string.content.data[i];
                     fwrite(&word, 2, 1, out_file);
                 }
+                word_count += string.content.len;
             } break;
             case TOKEN_ILLEGAL: {
                 print_loc(t.loc);
@@ -1094,4 +1130,50 @@ int main() {
             word_count += 1;
         }
     }
+
 }
+
+
+int main(int argc, char** argv) {
+    char* program = argv[0];
+    shift(&argc, &argv);
+    if (argc < 1) {
+        die_usage(program);
+    }
+
+    char *file_path = argv[0];
+    char *out_path = "test.bin";
+    shift(&argc, &argv);
+
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-o")) {
+            shift(&argc, &argv);
+            if (argc < 1) die_usage(program);
+            out_path = argv[0];
+        }
+    }
+
+    size_t size = 0;
+    char *content = read_file(file_path, &size);
+    if (!content) {
+        printf("[ERROR] could not read file %s: %s\n", file_path, strerror(errno));
+        exit(1);
+    }
+
+    FILE *out_file = fopen(out_path, "wb");
+    if (!out_file) {
+        printf("[ERROR] could not open out file `%s`: %s\n", out_path,
+               strerror(errno));
+        exit(1);
+    }
+
+    Label_Hashmap lhm = label_hminit();
+
+    Lexer first_pass_l = lex_new(content, size, file_path);
+    first_pass(&first_pass_l, &lhm);
+
+    Lexer l = lex_new(content, size, file_path);
+
+    compile_program(&l, &lhm, out_file);
+}
+
