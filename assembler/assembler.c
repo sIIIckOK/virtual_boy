@@ -533,8 +533,7 @@ Token parse_next_token(Lexer *l, Label_Hashmap *lhm) {
 }
 
 void first_pass(Lexer *l, Label_Hashmap *lhm) {
-    size_t current_org_val = 0;
-    size_t word_count_l = 1;
+    size_t word_count_l = 0;
     for (; l->cursor < l->size;) {
         String_Token st = lex_chop_token(l);
         if (st.content.len == 0)
@@ -576,7 +575,6 @@ void first_pass(Lexer *l, Label_Hashmap *lhm) {
                         }
                     }
                     word_count_l = number;
-                    current_org_val = number;
                 }
             } else {
                 continue;
@@ -897,7 +895,7 @@ uint16_t compile_lea(Token inst_token, Token dst_reg, Token offset_9, size_t pc)
         inst |= (offset_9.operand & 0b111111111);
         return inst;
     } else if (offset_9.type == TOKEN_LABEL_CALL) {
-        int16_t offset = get_label_pc_offset(pc, offset_9.operand) + 1;
+        int16_t offset = get_label_pc_offset(pc, offset_9.operand);
         inst |= (offset & 0b111111111);
         return inst;
     } else {
@@ -957,7 +955,7 @@ void die_usage(char* program) {
 
 void compile_program(Lexer* l, Label_Hashmap* lhm, FILE* out_file) {
     Token t = {0};
-    size_t word_count = 1;
+    size_t word_count = 0;
     for (; l->cursor < l->size;) {
         t = parse_next_token(l, lhm);
         switch (t.type) {
@@ -1142,7 +1140,7 @@ int main(int argc, char** argv) {
     }
 
     char *file_path = argv[0];
-    char *out_path = "test.bin";
+    char *out_path = "out.bin";
     shift(&argc, &argv);
 
     for (int i = 0; i < argc; i++) {

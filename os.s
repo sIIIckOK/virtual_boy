@@ -27,10 +27,11 @@ $out_loop:
     ldi %r0 $disp_data
     ld %r0 $out_sv_r0
     rti
-    $out_sv_r0: .fill #0
+    $out_sv_r0: .fill #x7721
 
 $putsp:
 $puts:
+    .fill #x6969
     st %r0 $puts_sv_r0
     st %r1 $puts_sv_r1
     ld %r1 $puts_sv_r0
@@ -45,8 +46,8 @@ $puts_end:
     ld %r0 $puts_sv_r0
     ld %r1 $puts_sv_r1
     rti
-    $puts_sv_r0: .fill #0
-    $puts_sv_r1: .fill #0
+    $puts_sv_r0: .fill #x6699
+    $puts_sv_r1: .fill #x6969
 
 $in:
     st %r0 $puts_sv_r0

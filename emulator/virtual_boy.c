@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <threads.h>
 
 typedef uint16_t uWord;
 typedef int16_t   Word;
@@ -134,7 +135,7 @@ void push_data(Byte_Data* byte_data, uWord data) {
 
 void print_machine_state(const Machine* machine) {
     for (int i = 0; i < 8; i++) {
-        printf("R%d:%d:0x%x\n", i, (int16_t)machine->registers[i], (uint16_t)machine->registers[i]);
+        printf("R%d:%d\n", i, (int16_t)machine->registers[i]);
     }
     printf("PC:0x%x\n", machine->PC);
     printf("PSR:%d\n", machine->PSR);
@@ -279,7 +280,6 @@ void op_ld(uWord rest, Machine* machine, Memory memory) {
     size_t addr = machine->PC + sext(offset, 9);
     uint16_t result = memory[addr];
     machine->registers[DR_id] = result;
-
     set_flags_from_result(machine, result);
 }
 
@@ -372,16 +372,13 @@ void op_trap(uWord rest, Machine* machine, Memory memory) {
             machine->registers[0] = getchar();
         } break;
         default: {
-            uWord addr = memory[trap_8 + MEM_TRAPVT_BEGIN];
-
             memory[machine->SSP++] = machine->PSR;
             memory[machine->SSP++] = machine->PC;
-
             machine->PSR &= ~PSR_BIT_SSM;
+
+            uWord addr = memory[trap_8 + MEM_TRAPVT_BEGIN];
+
             machine->PC = addr;
-            for (int i = 0; i < 15; ++i) {
-                int y = addr + i;
-            }
         } break;
     }
 }
@@ -498,7 +495,6 @@ void execute_program(Machine* machine, Memory memory) {
         uWord inst = memory[machine->PC++];
         bool res = execute_instruction(machine, inst, memory);
         if (!res) printf("ERROR: Instruction no %u\n", machine->PC);
-
     }
 }
 
@@ -616,12 +612,12 @@ int main(int argc, char** argv) {
     memory[MACHINE_CONTROL_REGISTER] = 1;   // init MCR
     if (loados) {
         Byte_Data os = read_bin_from_file(os_file_name);
-        map_byte_data(memory, &os, MEM_BEGIN);
+        if (!map_byte_data(memory, &os, MEM_BEGIN)) exit(1);
         machine.PC = MEM_OSSPC_BEGIN;
     }
     if (loadprogram) {
         Byte_Data bin_data = read_bin_from_file(program_file_name);
-        map_byte_data(memory, &bin_data, MEM_USERSPC_BEGIN);
+        if (!map_byte_data(memory, &bin_data, MEM_USERSPC_BEGIN)) exit(1);
     }
     execute_program(&machine, memory);
     print_machine_state(&machine);
