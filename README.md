@@ -1,7 +1,7 @@
 # NOTES 
 this is an incomplete project that made for education purposes, so its not supposed to be used in serious settings.  
 
-# A Emulator For LC3 Architecture
+# An Emulator For LC3 Architecture
 - Written completely in c
 
 ## References
